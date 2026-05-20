@@ -61,3 +61,51 @@ func TestRPC_Status(t *testing.T) {
 		t.Errorf("TickIntervalSeconds = %d, want 5", reply.TickIntervalSeconds)
 	}
 }
+
+func TestRPC_WatchAddListRemove(t *testing.T) {
+	client, _, _ := setupRPCServer(t)
+
+	if err := client.Call(rpcapi.ServiceName+".WatchAdd",
+		rpcapi.WatchAddArgs{Kind: "bundle", Identifier: "com.google.antigravity"},
+		&rpcapi.WatchAddReply{}); err != nil {
+		t.Fatalf("WatchAdd: %v", err)
+	}
+	if err := client.Call(rpcapi.ServiceName+".WatchAdd",
+		rpcapi.WatchAddArgs{Kind: "binary", Identifier: "claude"},
+		&rpcapi.WatchAddReply{}); err != nil {
+		t.Fatalf("WatchAdd #2: %v", err)
+	}
+
+	var list rpcapi.WatchListReply
+	if err := client.Call(rpcapi.ServiceName+".WatchList", rpcapi.WatchListArgs{}, &list); err != nil {
+		t.Fatalf("WatchList: %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Errorf("expected 2 watched, got %d", len(list.Items))
+	}
+
+	if err := client.Call(rpcapi.ServiceName+".WatchRemove",
+		rpcapi.WatchRemoveArgs{Kind: "binary", Identifier: "claude"},
+		&rpcapi.WatchRemoveReply{}); err != nil {
+		t.Fatalf("WatchRemove: %v", err)
+	}
+
+	var listAfterRemove rpcapi.WatchListReply
+	_ = client.Call(rpcapi.ServiceName+".WatchList", rpcapi.WatchListArgs{}, &listAfterRemove)
+	if len(listAfterRemove.Items) != 1 || listAfterRemove.Items[0].Identifier != "com.google.antigravity" {
+		t.Errorf("after remove, got %+v", listAfterRemove.Items)
+	}
+}
+
+func TestRPC_WatchAdd_InvalidatesCache(t *testing.T) {
+	client, _, cache := setupRPCServer(t)
+
+	if err := client.Call(rpcapi.ServiceName+".WatchAdd",
+		rpcapi.WatchAddArgs{Kind: "binary", Identifier: "claude"},
+		&rpcapi.WatchAddReply{}); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.Snapshot().AllowedBinaries["claude"] {
+		t.Errorf("cache not refreshed after WatchAdd")
+	}
+}
