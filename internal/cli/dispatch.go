@@ -8,6 +8,9 @@ import (
 // Dispatch parses os.Args[1:] and routes to the right subcommand.
 func Dispatch(args []string) int {
 	if len(args) == 0 {
+		if IsStdinTerminal() {
+			return RunMenu()
+		}
 		printUsage(os.Stderr)
 		return 64
 	}
