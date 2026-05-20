@@ -12,11 +12,11 @@ const (
 // Fields use empty string (not pointer) for "not applicable" — matches the
 // observations table's NOT NULL DEFAULT '' convention.
 type Signal struct {
-	Source     Source
-	BundleID   string
-	Title      string
-	BinaryName string
-	CWD        string
+	Source      Source
+	BundleID    string
+	WindowTitle string
+	BinaryName  string
+	Cwd         string
 }
 
 func (s Signal) IsAgent() bool { return s.Source == SourceAgent }
@@ -31,7 +31,7 @@ type RuleSpec struct {
 	MatchBundleID    *string
 	MatchTitleSubstr *string
 	MatchBinaryName  *string
-	MatchCWDPrefix   *string
+	MatchCwdPrefix   *string
 }
 
 // ProposedRule is what generalize.go produces — a draft rule for confirmation
@@ -41,5 +41,5 @@ type ProposedRule struct {
 	MatchBundleID    *string
 	MatchTitleSubstr *string
 	MatchBinaryName  *string
-	MatchCWDPrefix   *string
+	MatchCwdPrefix   *string
 }
