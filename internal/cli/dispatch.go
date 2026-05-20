@@ -1,0 +1,45 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+)
+
+// Dispatch parses os.Args[1:] and routes to the right subcommand.
+func Dispatch(args []string) int {
+	if len(args) == 0 {
+		printUsage()
+		return 64
+	}
+	switch args[0] {
+	case "status":
+		return cmdStatus(args[1:])
+	case "watch":
+		return cmdWatch(args[1:])
+	case "project":
+		return cmdProject(args[1:])
+	case "review":
+		return cmdReview(args[1:])
+	case "rules":
+		return cmdRules(args[1:])
+	case "report":
+		return cmdReport(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		printUsage()
+		return 64
+	}
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, `antitimely — work time tracker by project
+
+Usage:
+  antitimely daemon  [--interval=5s] [--idle-thresh=120s] [--agent-cpu-thresh=5]
+  antitimely status
+  antitimely watch  add app|binary <id>  |  list  |  remove <id>
+  antitimely project  add <name>  |  list  |  delete <name>
+  antitimely review
+  antitimely rules    list  |  delete <id>
+  antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]`)
+}
