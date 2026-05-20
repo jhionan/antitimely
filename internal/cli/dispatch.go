@@ -8,10 +8,13 @@ import (
 // Dispatch parses os.Args[1:] and routes to the right subcommand.
 func Dispatch(args []string) int {
 	if len(args) == 0 {
-		printUsage()
+		printUsage(os.Stderr)
 		return 64
 	}
 	switch args[0] {
+	case "help", "--help", "-h":
+		printUsage(os.Stdout)
+		return 0
 	case "status":
 		return cmdStatus(args[1:])
 	case "watch":
@@ -26,13 +29,13 @@ func Dispatch(args []string) int {
 		return cmdReport(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
-		printUsage()
+		printUsage(os.Stderr)
 		return 64
 	}
 }
 
-func printUsage() {
-	fmt.Fprintln(os.Stderr, `antitimely — work time tracker by project
+func printUsage(w *os.File) {
+	fmt.Fprintln(w, `antitimely — work time tracker by project
 
 Usage:
   antitimely daemon  [--interval=5s] [--idle-thresh=120s] [--agent-cpu-thresh=5]
@@ -41,5 +44,9 @@ Usage:
   antitimely project  add <name>  |  list  |  delete <name>
   antitimely review
   antitimely rules    list  |  delete <id>
-  antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]`)
+  antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]
+  antitimely help    show this message
+
+Run any subcommand with the daemon running ('antitimely daemon' in another terminal).
+State lives in ~/.antitimely/ (db.sqlite, antitimely.sock, antitimely.pid).`)
 }

@@ -18,8 +18,7 @@ func main() {
 	daemon.SetSchema(schemaSQL)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely <command> [...]")
-		os.Exit(64)
+		os.Exit(cli.Dispatch(nil))
 	}
 	if os.Args[1] == "daemon" {
 		os.Exit(runDaemon(os.Args[2:]))
