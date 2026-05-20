@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -187,4 +188,139 @@ func (s *AntitimelyService) ProjectDelete(args rpcapi.ProjectDeleteArgs, reply *
 		return err
 	}
 	return s.ReloadCache()
+}
+
+// PendingReview returns observations that have unassigned ticks and need tagging.
+func (s *AntitimelyService) PendingReview(args rpcapi.PendingReviewArgs, reply *rpcapi.PendingReviewReply) error {
+	ctx := context.Background()
+	limit := args.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.Q.PendingReviewSignatures(ctx, int64(limit))
+	if err != nil {
+		return err
+	}
+	reply.Signatures = make([]rpcapi.Signature, 0, len(rows))
+	for _, r := range rows {
+		lastSeen, _ := r.LastSeen.(int64)
+		reply.Signatures = append(reply.Signatures, rpcapi.Signature{
+			ObservationID: r.ID,
+			Source:        r.Source,
+			BundleID:      r.BundleID,
+			WindowTitle:   r.WindowTitle,
+			BinaryName:    r.BinaryName,
+			CWD:           r.Cwd,
+			Ticks:         r.Ticks,
+			LastSeenUnix:  lastSeen,
+		})
+	}
+	return nil
+}
+
+// TagSignature assigns ticks for an observation to a project, optionally
+// creating a rule to retag all matching unassigned ticks retroactively.
+func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rpcapi.TagSignatureReply) error {
+	ctx := context.Background()
+	now := time.Now().Unix()
+
+	proj, err := s.Q.GetProjectByName(ctx, args.ProjectName)
+	if err != nil {
+		if !args.CreateProject {
+			return err
+		}
+		id, err2 := s.Q.AddProject(ctx, store.AddProjectParams{Name: args.ProjectName, CreatedAt: now})
+		if err2 != nil {
+			return err2
+		}
+		proj.ID = id
+		proj.Name = args.ProjectName
+	}
+
+	if args.Rule == nil {
+		if err := s.Q.RetagSingleObservation(ctx, store.RetagSingleObservationParams{
+			ProjectID:     sql.NullInt64{Int64: proj.ID, Valid: true},
+			ObservationID: args.ObservationID,
+		}); err != nil {
+			return err
+		}
+		reply.RuleCreated = false
+		reply.TicksRetagged = -1
+		return nil
+	}
+
+	rid, err := s.Q.AddRule(ctx, store.AddRuleParams{
+		ProjectID:        proj.ID,
+		Priority:         args.Rule.Priority,
+		MatchBundleID:    nullStr(args.Rule.MatchBundleID),
+		MatchTitleSubstr: nullStr(args.Rule.MatchTitleSubstr),
+		MatchBinaryName:  nullStr(args.Rule.MatchBinaryName),
+		MatchCwdPrefix:   nullStr(args.Rule.MatchCWDPrefix),
+		CreatedAt:        now,
+	})
+	if err != nil {
+		return err
+	}
+
+	// ApplyRuleRetroactivelyCountedParams uses Column2/4/6/8 as IS NULL sentinels
+	// (sqlc generated from bare ? placeholders in the null-check positions).
+	// Pass non-nil string value when the match field is set, nil otherwise.
+	bundleNull := nullStr(args.Rule.MatchBundleID)
+	titleNull := nullStr(args.Rule.MatchTitleSubstr)
+	binaryNull := nullStr(args.Rule.MatchBinaryName)
+	cwdNull := nullStr(args.Rule.MatchCWDPrefix)
+
+	var bundleCol2 interface{}
+	if bundleNull.Valid {
+		bundleCol2 = bundleNull.String
+	}
+	var titleCol4 interface{}
+	if titleNull.Valid {
+		titleCol4 = titleNull.String
+	}
+	var binaryCol6 interface{}
+	if binaryNull.Valid {
+		binaryCol6 = binaryNull.String
+	}
+	var cwdCol8 interface{}
+	if cwdNull.Valid {
+		cwdCol8 = cwdNull.String
+	}
+
+	count, err := s.Q.ApplyRuleRetroactivelyCounted(ctx, store.ApplyRuleRetroactivelyCountedParams{
+		ProjectID:  sql.NullInt64{Int64: proj.ID, Valid: true},
+		Column2:    bundleCol2,
+		BundleID:   args.Rule.MatchBundleID,
+		Column4:    titleCol4,
+		Column5:    titleNull,
+		Column6:    binaryCol6,
+		BinaryName: args.Rule.MatchBinaryName,
+		Column8:    cwdCol8,
+		Column9:    cwdNull,
+	})
+	if err != nil {
+		return err
+	}
+
+	reply.RuleCreated = true
+	reply.RuleID = rid
+	reply.TicksRetagged = count
+	return s.ReloadCache()
+}
+
+// IgnoreSignature marks an observation so it won't appear in the review queue.
+func (s *AntitimelyService) IgnoreSignature(args rpcapi.IgnoreSignatureArgs, reply *rpcapi.IgnoreSignatureReply) error {
+	ctx := context.Background()
+	return s.Q.IgnoreObservation(ctx, store.IgnoreObservationParams{
+		ObservationID: args.ObservationID,
+		IgnoredAt:     time.Now().Unix(),
+	})
+}
+
+// nullStr converts a non-empty string to a valid NullString; empty -> invalid.
+func nullStr(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
 }

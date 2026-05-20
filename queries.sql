@@ -92,3 +92,20 @@ ON CONFLICT (observation_id) DO NOTHING;
 SELECT id, source, bundle_id, window_title, binary_name, cwd, first_seen
 FROM observations
 WHERE id = ?;
+
+-- name: ApplyRuleRetroactivelyCounted :execrows
+UPDATE ticks
+SET project_id = ?
+WHERE project_id IS NULL
+  AND observation_id IN (
+      SELECT id FROM observations
+      WHERE (? IS NULL OR bundle_id = ?)
+        AND (? IS NULL OR window_title LIKE '%' || ? || '%')
+        AND (? IS NULL OR binary_name = ?)
+        AND (? IS NULL OR cwd LIKE ? || '%')
+  );
+
+-- name: RetagSingleObservation :exec
+UPDATE ticks
+SET project_id = ?
+WHERE project_id IS NULL AND observation_id = ?;

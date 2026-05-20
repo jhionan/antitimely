@@ -72,6 +72,49 @@ func (q *Queries) AddWatchedProgram(ctx context.Context, arg AddWatchedProgramPa
 	return err
 }
 
+const applyRuleRetroactivelyCounted = `-- name: ApplyRuleRetroactivelyCounted :execrows
+UPDATE ticks
+SET project_id = ?
+WHERE project_id IS NULL
+  AND observation_id IN (
+      SELECT id FROM observations
+      WHERE (? IS NULL OR bundle_id = ?)
+        AND (? IS NULL OR window_title LIKE '%' || ? || '%')
+        AND (? IS NULL OR binary_name = ?)
+        AND (? IS NULL OR cwd LIKE ? || '%')
+  )
+`
+
+type ApplyRuleRetroactivelyCountedParams struct {
+	ProjectID  sql.NullInt64
+	Column2    interface{}
+	BundleID   string
+	Column4    interface{}
+	Column5    sql.NullString
+	Column6    interface{}
+	BinaryName string
+	Column8    interface{}
+	Column9    sql.NullString
+}
+
+func (q *Queries) ApplyRuleRetroactivelyCounted(ctx context.Context, arg ApplyRuleRetroactivelyCountedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, applyRuleRetroactivelyCounted,
+		arg.ProjectID,
+		arg.Column2,
+		arg.BundleID,
+		arg.Column4,
+		arg.Column5,
+		arg.Column6,
+		arg.BinaryName,
+		arg.Column8,
+		arg.Column9,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countPendingReviewSignatures = `-- name: CountPendingReviewSignatures :one
 SELECT COUNT(DISTINCT o.id) AS n
 FROM observations o
@@ -412,6 +455,22 @@ type RemoveWatchedProgramParams struct {
 
 func (q *Queries) RemoveWatchedProgram(ctx context.Context, arg RemoveWatchedProgramParams) error {
 	_, err := q.db.ExecContext(ctx, removeWatchedProgram, arg.Kind, arg.Identifier)
+	return err
+}
+
+const retagSingleObservation = `-- name: RetagSingleObservation :exec
+UPDATE ticks
+SET project_id = ?
+WHERE project_id IS NULL AND observation_id = ?
+`
+
+type RetagSingleObservationParams struct {
+	ProjectID     sql.NullInt64
+	ObservationID int64
+}
+
+func (q *Queries) RetagSingleObservation(ctx context.Context, arg RetagSingleObservationParams) error {
+	_, err := q.db.ExecContext(ctx, retagSingleObservation, arg.ProjectID, arg.ObservationID)
 	return err
 }
 
