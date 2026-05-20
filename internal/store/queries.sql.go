@@ -348,7 +348,7 @@ func (q *Queries) ListWatchedPrograms(ctx context.Context) ([]ListWatchedProgram
 
 const pendingReviewSignatures = `-- name: PendingReviewSignatures :many
 SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd,
-       COUNT(t.ts) AS ticks, MAX(t.ts) AS last_seen
+       COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
 FROM observations o
 JOIN ticks t ON t.observation_id = o.id
 WHERE t.project_id IS NULL
