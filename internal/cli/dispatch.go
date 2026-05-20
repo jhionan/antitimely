@@ -29,6 +29,10 @@ func Dispatch(args []string) int {
 		return cmdRules(args[1:])
 	case "report":
 		return cmdReport(args[1:])
+	case "install-launch-agent":
+		return cmdInstallLaunchAgent(args[1:])
+	case "uninstall-launch-agent":
+		return cmdUninstallLaunchAgent(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printUsage(os.Stderr)
@@ -48,6 +52,8 @@ Usage:
   antitimely review
   antitimely rules    list  |  delete <id>
   antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]
+  antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
+  antitimely uninstall-launch-agent   remove launch agent and stop background daemon
   antitimely help    show this message
 
 Run any subcommand with the daemon running ('antitimely daemon' in another terminal).
