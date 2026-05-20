@@ -109,3 +109,36 @@ func TestRPC_WatchAdd_InvalidatesCache(t *testing.T) {
 		t.Errorf("cache not refreshed after WatchAdd")
 	}
 }
+
+func TestRPC_ProjectsAddListDelete(t *testing.T) {
+	client, _, _ := setupRPCServer(t)
+
+	var addReply rpcapi.ProjectAddReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectAdd",
+		rpcapi.ProjectAddArgs{Name: "foca-api"}, &addReply); err != nil {
+		t.Fatal(err)
+	}
+	if addReply.ID == 0 {
+		t.Error("expected non-zero project id")
+	}
+
+	var list rpcapi.ProjectListReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectList", rpcapi.ProjectListArgs{}, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].Name != "foca-api" {
+		t.Errorf("got %+v", list.Items)
+	}
+
+	if err := client.Call(rpcapi.ServiceName+".ProjectDelete",
+		rpcapi.ProjectDeleteArgs{Name: "foca-api"},
+		&rpcapi.ProjectDeleteReply{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var listAfterDelete rpcapi.ProjectListReply
+	_ = client.Call(rpcapi.ServiceName+".ProjectList", rpcapi.ProjectListArgs{}, &listAfterDelete)
+	if len(listAfterDelete.Items) != 0 {
+		t.Errorf("after delete, got %d", len(listAfterDelete.Items))
+	}
+}

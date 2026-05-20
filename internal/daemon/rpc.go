@@ -152,3 +152,39 @@ func (s *AntitimelyService) WatchList(args rpcapi.WatchListArgs, reply *rpcapi.W
 	}
 	return nil
 }
+
+// ProjectAdd creates a new project and returns its ID.
+func (s *AntitimelyService) ProjectAdd(args rpcapi.ProjectAddArgs, reply *rpcapi.ProjectAddReply) error {
+	ctx := context.Background()
+	id, err := s.Q.AddProject(ctx, store.AddProjectParams{
+		Name: args.Name, CreatedAt: time.Now().Unix(),
+	})
+	if err != nil {
+		return err
+	}
+	reply.ID = id
+	return nil
+}
+
+// ProjectList returns all projects ordered by name.
+func (s *AntitimelyService) ProjectList(args rpcapi.ProjectListArgs, reply *rpcapi.ProjectListReply) error {
+	ctx := context.Background()
+	rows, err := s.Q.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	reply.Items = make([]rpcapi.Project, 0, len(rows))
+	for _, r := range rows {
+		reply.Items = append(reply.Items, rpcapi.Project{ID: r.ID, Name: r.Name})
+	}
+	return nil
+}
+
+// ProjectDelete removes a project by name and refreshes the cache.
+func (s *AntitimelyService) ProjectDelete(args rpcapi.ProjectDeleteArgs, reply *rpcapi.ProjectDeleteReply) error {
+	ctx := context.Background()
+	if err := s.Q.DeleteProjectByName(ctx, args.Name); err != nil {
+		return err
+	}
+	return s.ReloadCache()
+}
