@@ -43,14 +43,18 @@ type WatchedItem struct {
 
 // --- Projects ---
 
-type ProjectAddArgs struct{ Name string }
+type ProjectAddArgs struct {
+	Name        string
+	CompanyName string // optional; empty = no company at creation
+}
 type ProjectAddReply struct{ ID int64 }
 
 type ProjectListArgs struct{}
 type ProjectListReply struct{ Items []Project }
 type Project struct {
-	ID   int64
-	Name string
+	ID          int64
+	Name        string
+	CompanyName string // empty if no company
 }
 
 type ProjectDeleteArgs struct{ Name string }
@@ -120,3 +124,24 @@ type ReportReply struct {
 	Totals     map[string]int64
 	Unassigned int64
 }
+
+// --- Companies ---
+
+type CompanyAddArgs struct{ Name string }
+type CompanyAddReply struct{ ID int64 }
+
+type CompanyListArgs struct{}
+type CompanyListReply struct{ Items []Company }
+type Company struct {
+	ID   int64
+	Name string
+}
+
+type CompanyDeleteArgs struct{ Name string }
+type CompanyDeleteReply struct{}
+
+type ProjectSetCompanyArgs struct {
+	ProjectName string
+	CompanyName string // empty = unassign
+}
+type ProjectSetCompanyReply struct{}

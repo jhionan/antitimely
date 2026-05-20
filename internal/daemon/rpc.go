@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/rian/antitimely/internal/domain"
@@ -157,8 +158,18 @@ func (s *AntitimelyService) WatchList(args rpcapi.WatchListArgs, reply *rpcapi.W
 // ProjectAdd creates a new project and returns its ID.
 func (s *AntitimelyService) ProjectAdd(args rpcapi.ProjectAddArgs, reply *rpcapi.ProjectAddReply) error {
 	ctx := context.Background()
+	var companyID sql.NullInt64
+	if args.CompanyName != "" {
+		c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
+		if err != nil {
+			return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
+		}
+		companyID = sql.NullInt64{Int64: c.ID, Valid: true}
+	}
 	id, err := s.Q.AddProject(ctx, store.AddProjectParams{
-		Name: args.Name, CreatedAt: time.Now().Unix(),
+		Name:      args.Name,
+		CompanyID: companyID,
+		CreatedAt: time.Now().Unix(),
 	})
 	if err != nil {
 		return err
@@ -176,7 +187,11 @@ func (s *AntitimelyService) ProjectList(args rpcapi.ProjectListArgs, reply *rpca
 	}
 	reply.Items = make([]rpcapi.Project, 0, len(rows))
 	for _, r := range rows {
-		reply.Items = append(reply.Items, rpcapi.Project{ID: r.ID, Name: r.Name})
+		reply.Items = append(reply.Items, rpcapi.Project{
+			ID:          r.ID,
+			Name:        r.Name,
+			CompanyName: r.CompanyName.String, // zero value of NullString is ""
+		})
 	}
 	return nil
 }
@@ -367,6 +382,56 @@ func (s *AntitimelyService) Report(args rpcapi.ReportArgs, reply *rpcapi.ReportR
 	}
 	reply.Unassigned = unassigned * int64(s.TickIntervalSeconds)
 	return nil
+}
+
+// CompanyAdd creates a new company and returns its ID.
+func (s *AntitimelyService) CompanyAdd(args rpcapi.CompanyAddArgs, reply *rpcapi.CompanyAddReply) error {
+	ctx := context.Background()
+	id, err := s.Q.AddCompany(ctx, store.AddCompanyParams{
+		Name: args.Name, CreatedAt: time.Now().Unix(),
+	})
+	if err != nil {
+		return err
+	}
+	reply.ID = id
+	return nil
+}
+
+// CompanyList returns all companies ordered by name.
+func (s *AntitimelyService) CompanyList(args rpcapi.CompanyListArgs, reply *rpcapi.CompanyListReply) error {
+	ctx := context.Background()
+	rows, err := s.Q.ListCompanies(ctx)
+	if err != nil {
+		return err
+	}
+	reply.Items = make([]rpcapi.Company, 0, len(rows))
+	for _, r := range rows {
+		reply.Items = append(reply.Items, rpcapi.Company{ID: r.ID, Name: r.Name})
+	}
+	return nil
+}
+
+// CompanyDelete removes a company by name.
+func (s *AntitimelyService) CompanyDelete(args rpcapi.CompanyDeleteArgs, reply *rpcapi.CompanyDeleteReply) error {
+	ctx := context.Background()
+	return s.Q.DeleteCompanyByName(ctx, args.Name)
+}
+
+// ProjectSetCompany assigns or unassigns a company from a project.
+func (s *AntitimelyService) ProjectSetCompany(args rpcapi.ProjectSetCompanyArgs, reply *rpcapi.ProjectSetCompanyReply) error {
+	ctx := context.Background()
+	var companyID sql.NullInt64
+	if args.CompanyName != "" {
+		c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
+		if err != nil {
+			return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
+		}
+		companyID = sql.NullInt64{Int64: c.ID, Valid: true}
+	}
+	return s.Q.SetProjectCompany(ctx, store.SetProjectCompanyParams{
+		CompanyID: companyID,
+		Name:      args.ProjectName,
+	})
 }
 
 // nullStr converts a non-empty string to a valid NullString; empty -> invalid.

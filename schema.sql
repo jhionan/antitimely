@@ -1,7 +1,15 @@
+-- A company groups projects.
+CREATE TABLE IF NOT EXISTS companies (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL
+) STRICT;
+
 -- A project = a billable bucket.
 CREATE TABLE IF NOT EXISTS projects (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
+    company_id  INTEGER REFERENCES companies(id) ON DELETE SET NULL,
     created_at  INTEGER NOT NULL
 ) STRICT;
 

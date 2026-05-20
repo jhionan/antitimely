@@ -8,6 +8,12 @@ import (
 	"database/sql"
 )
 
+type Company struct {
+	ID        int64
+	Name      string
+	CreatedAt int64
+}
+
 type IgnoredObservation struct {
 	ObservationID int64
 	IgnoredAt     int64
@@ -26,6 +32,7 @@ type Observation struct {
 type Project struct {
 	ID        int64
 	Name      string
+	CompanyID sql.NullInt64
 	CreatedAt int64
 }
 

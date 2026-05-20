@@ -10,17 +10,34 @@ import (
 	"database/sql"
 )
 
-const addProject = `-- name: AddProject :one
-INSERT INTO projects (name, created_at) VALUES (?, ?) RETURNING id
+const addCompany = `-- name: AddCompany :one
+INSERT INTO companies (name, created_at) VALUES (?, ?) RETURNING id
 `
 
-type AddProjectParams struct {
+type AddCompanyParams struct {
 	Name      string
 	CreatedAt int64
 }
 
+func (q *Queries) AddCompany(ctx context.Context, arg AddCompanyParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, addCompany, arg.Name, arg.CreatedAt)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const addProject = `-- name: AddProject :one
+INSERT INTO projects (name, company_id, created_at) VALUES (?, ?, ?) RETURNING id
+`
+
+type AddProjectParams struct {
+	Name      string
+	CompanyID sql.NullInt64
+	CreatedAt int64
+}
+
 func (q *Queries) AddProject(ctx context.Context, arg AddProjectParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, addProject, arg.Name, arg.CreatedAt)
+	row := q.db.QueryRowContext(ctx, addProject, arg.Name, arg.CompanyID, arg.CreatedAt)
 	var id int64
 	err := row.Scan(&id)
 	return id, err
@@ -130,6 +147,15 @@ func (q *Queries) CountPendingReviewSignatures(ctx context.Context) (int64, erro
 	return n, err
 }
 
+const deleteCompanyByName = `-- name: DeleteCompanyByName :exec
+DELETE FROM companies WHERE name = ?
+`
+
+func (q *Queries) DeleteCompanyByName(ctx context.Context, name string) error {
+	_, err := q.db.ExecContext(ctx, deleteCompanyByName, name)
+	return err
+}
+
 const deleteProjectByName = `-- name: DeleteProjectByName :exec
 DELETE FROM projects WHERE name = ?
 `
@@ -146,6 +172,22 @@ DELETE FROM rules WHERE id = ?
 func (q *Queries) DeleteRule(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, deleteRule, id)
 	return err
+}
+
+const getCompanyByName = `-- name: GetCompanyByName :one
+SELECT id, name FROM companies WHERE name = ?
+`
+
+type GetCompanyByNameRow struct {
+	ID   int64
+	Name string
+}
+
+func (q *Queries) GetCompanyByName(ctx context.Context, name string) (GetCompanyByNameRow, error) {
+	row := q.db.QueryRowContext(ctx, getCompanyByName, name)
+	var i GetCompanyByNameRow
+	err := row.Scan(&i.ID, &i.Name)
+	return i, err
 }
 
 const getObservation = `-- name: GetObservation :one
@@ -227,13 +269,49 @@ func (q *Queries) IsObservationIgnored(ctx context.Context, observationID int64)
 	return ignored, err
 }
 
+const listCompanies = `-- name: ListCompanies :many
+SELECT id, name FROM companies ORDER BY name
+`
+
+type ListCompaniesRow struct {
+	ID   int64
+	Name string
+}
+
+func (q *Queries) ListCompanies(ctx context.Context) ([]ListCompaniesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCompanies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCompaniesRow{}
+	for rows.Next() {
+		var i ListCompaniesRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
-SELECT id, name FROM projects ORDER BY name
+SELECT p.id, p.name, c.name AS company_name
+FROM projects p
+LEFT JOIN companies c ON c.id = p.company_id
+ORDER BY p.name
 `
 
 type ListProjectsRow struct {
-	ID   int64
-	Name string
+	ID          int64
+	Name        string
+	CompanyName sql.NullString
 }
 
 func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
@@ -245,7 +323,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	items := []ListProjectsRow{}
 	for rows.Next() {
 		var i ListProjectsRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+		if err := rows.Scan(&i.ID, &i.Name, &i.CompanyName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -471,6 +549,20 @@ type RetagSingleObservationParams struct {
 
 func (q *Queries) RetagSingleObservation(ctx context.Context, arg RetagSingleObservationParams) error {
 	_, err := q.db.ExecContext(ctx, retagSingleObservation, arg.ProjectID, arg.ObservationID)
+	return err
+}
+
+const setProjectCompany = `-- name: SetProjectCompany :exec
+UPDATE projects SET company_id = ? WHERE name = ?
+`
+
+type SetProjectCompanyParams struct {
+	CompanyID sql.NullInt64
+	Name      string
+}
+
+func (q *Queries) SetProjectCompany(ctx context.Context, arg SetProjectCompanyParams) error {
+	_, err := q.db.ExecContext(ctx, setProjectCompany, arg.CompanyID, arg.Name)
 	return err
 }
 

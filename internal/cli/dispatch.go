@@ -19,6 +19,8 @@ func Dispatch(args []string) int {
 		return cmdStatus(args[1:])
 	case "watch":
 		return cmdWatch(args[1:])
+	case "company":
+		return cmdCompany(args[1:])
 	case "project":
 		return cmdProject(args[1:])
 	case "review":
@@ -41,7 +43,8 @@ Usage:
   antitimely daemon  [--interval=5s] [--idle-thresh=120s] [--agent-cpu-thresh=5]
   antitimely status
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
-  antitimely project  add <name>  |  list  |  delete <name>
+  antitimely company  add <name>  |  list  |  delete <name>
+  antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]
   antitimely review
   antitimely rules    list  |  delete <id>
   antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]

@@ -51,13 +51,16 @@ DELETE FROM watched_programs WHERE kind = ? AND identifier = ?;
 SELECT id, kind, identifier FROM watched_programs ORDER BY kind, identifier;
 
 -- name: AddProject :one
-INSERT INTO projects (name, created_at) VALUES (?, ?) RETURNING id;
+INSERT INTO projects (name, company_id, created_at) VALUES (?, ?, ?) RETURNING id;
 
 -- name: GetProjectByName :one
 SELECT id, name FROM projects WHERE name = ?;
 
 -- name: ListProjects :many
-SELECT id, name FROM projects ORDER BY name;
+SELECT p.id, p.name, c.name AS company_name
+FROM projects p
+LEFT JOIN companies c ON c.id = p.company_id
+ORDER BY p.name;
 
 -- name: DeleteProjectByName :exec
 DELETE FROM projects WHERE name = ?;
@@ -109,3 +112,18 @@ WHERE project_id IS NULL
 UPDATE ticks
 SET project_id = ?
 WHERE project_id IS NULL AND observation_id = ?;
+
+-- name: AddCompany :one
+INSERT INTO companies (name, created_at) VALUES (?, ?) RETURNING id;
+
+-- name: GetCompanyByName :one
+SELECT id, name FROM companies WHERE name = ?;
+
+-- name: ListCompanies :many
+SELECT id, name FROM companies ORDER BY name;
+
+-- name: DeleteCompanyByName :exec
+DELETE FROM companies WHERE name = ?;
+
+-- name: SetProjectCompany :exec
+UPDATE projects SET company_id = ? WHERE name = ?;
