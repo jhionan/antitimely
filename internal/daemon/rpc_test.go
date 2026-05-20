@@ -207,3 +207,64 @@ func TestRPC_IgnoreSignature(t *testing.T) {
 		t.Errorf("expected ignored=1, got %d", ignored)
 	}
 }
+
+func TestRPC_RulesListDelete(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+	projID, _ := q.AddProject(ctx, store.AddProjectParams{Name: "foca-api", CreatedAt: 1000})
+
+	rid, _ := q.AddRule(ctx, store.AddRuleParams{
+		ProjectID: projID, Priority: 100,
+		MatchBinaryName: sql.NullString{String: "claude", Valid: true},
+		CreatedAt:       1000,
+	})
+
+	var list rpcapi.RulesListReply
+	if err := client.Call(rpcapi.ServiceName+".RulesList", rpcapi.RulesListArgs{}, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].ID != rid {
+		t.Errorf("got %+v", list.Items)
+	}
+
+	if err := client.Call(rpcapi.ServiceName+".RuleDelete",
+		rpcapi.RuleDeleteArgs{ID: rid}, &rpcapi.RuleDeleteReply{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var listAfterDelete rpcapi.RulesListReply
+	_ = client.Call(rpcapi.ServiceName+".RulesList", rpcapi.RulesListArgs{}, &listAfterDelete)
+	if len(listAfterDelete.Items) != 0 {
+		t.Errorf("after delete: %d items", len(listAfterDelete.Items))
+	}
+}
+
+func TestRPC_Report(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+	projID, _ := q.AddProject(ctx, store.AddProjectParams{Name: "foca-api", CreatedAt: 0})
+	obsID, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/x", FirstSeen: 0,
+	})
+	for _, ts := range []int64{100, 105, 110} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsID,
+			ProjectID: sql.NullInt64{Int64: projID, Valid: true}})
+	}
+	for _, ts := range []int64{200, 205} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsID})
+	}
+
+	var rep rpcapi.ReportReply
+	args := rpcapi.ReportArgs{FromUnix: 0, ToUnix: 9999}
+	if err := client.Call(rpcapi.ServiceName+".Report", args, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Totals["foca-api"] != 15 { // 3 ticks * 5s
+		t.Errorf("foca-api total = %d, want 15", rep.Totals["foca-api"])
+	}
+	if rep.Unassigned != 10 { // 2 ticks * 5s
+		t.Errorf("Unassigned = %d, want 10", rep.Unassigned)
+	}
+}

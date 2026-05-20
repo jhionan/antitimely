@@ -262,9 +262,11 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return err
 	}
 
-	// ApplyRuleRetroactivelyCountedParams uses Column2/4/6/8 as IS NULL sentinels
-	// (sqlc generated from bare ? placeholders in the null-check positions).
-	// Pass non-nil string value when the match field is set, nil otherwise.
+	// Build params for ApplyRuleRetroactivelyCounted.
+	// sqlc generated Column2/Column4/Column6/Column8 as the IS NULL sentinels
+	// because the query uses bare "?" placeholders for the null checks.
+	// We pass the NullString itself as Column2/4/6/8 (nil when not valid) and
+	// the plain string as the equality operand Column3/5/7/9.
 	bundleNull := nullStr(args.Rule.MatchBundleID)
 	titleNull := nullStr(args.Rule.MatchTitleSubstr)
 	binaryNull := nullStr(args.Rule.MatchBinaryName)
@@ -315,6 +317,56 @@ func (s *AntitimelyService) IgnoreSignature(args rpcapi.IgnoreSignatureArgs, rep
 		ObservationID: args.ObservationID,
 		IgnoredAt:     time.Now().Unix(),
 	})
+}
+
+// RulesList returns all rules joined with their project name.
+func (s *AntitimelyService) RulesList(args rpcapi.RulesListArgs, reply *rpcapi.RulesListReply) error {
+	ctx := context.Background()
+	rows, err := s.Q.ListRules(ctx)
+	if err != nil {
+		return err
+	}
+	reply.Items = make([]rpcapi.Rule, 0, len(rows))
+	for _, r := range rows {
+		reply.Items = append(reply.Items, rpcapi.Rule{
+			ID:               r.ID,
+			ProjectName:      r.ProjectName,
+			Priority:         r.Priority,
+			MatchBundleID:    r.MatchBundleID.String,
+			MatchTitleSubstr: r.MatchTitleSubstr.String,
+			MatchBinaryName:  r.MatchBinaryName.String,
+			MatchCWDPrefix:   r.MatchCwdPrefix.String,
+		})
+	}
+	return nil
+}
+
+// RuleDelete removes a rule by ID and refreshes the cache.
+func (s *AntitimelyService) RuleDelete(args rpcapi.RuleDeleteArgs, reply *rpcapi.RuleDeleteReply) error {
+	ctx := context.Background()
+	if err := s.Q.DeleteRule(ctx, args.ID); err != nil {
+		return err
+	}
+	return s.ReloadCache()
+}
+
+// Report returns per-project tick totals and unassigned tick count for a time range.
+func (s *AntitimelyService) Report(args rpcapi.ReportArgs, reply *rpcapi.ReportReply) error {
+	ctx := context.Background()
+	rows, err := s.Q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: args.FromUnix, Ts_2: args.ToUnix})
+	if err != nil {
+		return err
+	}
+	reply.Totals = make(map[string]int64, len(rows))
+	for _, r := range rows {
+		reply.Totals[r.Name] = r.TickCount * int64(s.TickIntervalSeconds)
+	}
+	unassigned, err := s.Q.UnassignedTicksInRange(ctx, store.UnassignedTicksInRangeParams{Ts: args.FromUnix, Ts_2: args.ToUnix})
+	if err != nil {
+		return err
+	}
+	reply.Unassigned = unassigned * int64(s.TickIntervalSeconds)
+	return nil
 }
 
 // nullStr converts a non-empty string to a valid NullString; empty -> invalid.
