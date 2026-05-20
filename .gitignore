@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Binaries
+/antitimely
+/antitimelyd
+*.exe
+
+# Local state
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sock
+*.pid
+
+# Editor
+.vscode/
+.idea/
+
+# Test artifacts
+coverage.out
