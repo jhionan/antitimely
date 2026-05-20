@@ -26,6 +26,13 @@ func main() {
 			}
 			fmt.Printf("  pid=%d name=%q cpu_ticks=%d\n", p.PID, p.Name, p.CPUTicks)
 		}
+	case "ioreg":
+		s, err := macos.IdleSecondsReal()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("idle_seconds=%d\n", s)
 	case "lsof":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: smoke lsof <pid>")
