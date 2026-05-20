@@ -26,6 +26,23 @@ func main() {
 			}
 			fmt.Printf("  pid=%d name=%q cpu_ticks=%d\n", p.PID, p.Name, p.CPUTicks)
 		}
+	case "lsof":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: smoke lsof <pid>")
+			os.Exit(64)
+		}
+		var pid int
+		_, err := fmt.Sscanf(os.Args[2], "%d", &pid)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		cwd, err := macos.ProcessCWDReal(pid)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("pid=%d cwd=%q\n", pid, cwd)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown: %s\n", os.Args[1])
 		os.Exit(64)
