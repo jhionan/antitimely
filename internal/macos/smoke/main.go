@@ -26,6 +26,20 @@ func main() {
 			}
 			fmt.Printf("  pid=%d name=%q cpu_ticks=%d\n", p.PID, p.Name, p.CPUTicks)
 		}
+	case "frontmost":
+		fi, err := macos.FrontmostReal()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("bundle=%q name=%q pid=%d\n", fi.BundleID, fi.Name, fi.PID)
+	case "title":
+		t, err := macos.FocusedWindowTitleReal()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("title=%q\n", t)
 	case "ioreg":
 		s, err := macos.IdleSecondsReal()
 		if err != nil {
