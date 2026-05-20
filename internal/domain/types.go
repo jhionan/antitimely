@@ -43,3 +43,14 @@ type ProposedRule struct {
 	MatchBinaryName  *string
 	MatchCwdPrefix   *string
 }
+
+// Observation is a persisted signal signature, mirroring the observations table.
+type Observation struct {
+	ID          int64
+	Source      Source
+	BundleID    string
+	WindowTitle string
+	BinaryName  string
+	Cwd         string
+	FirstSeen   int64
+}
