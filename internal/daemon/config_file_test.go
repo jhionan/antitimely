@@ -1,0 +1,59 @@
+package daemon
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadFileConfig_Missing(t *testing.T) {
+	fc, err := LoadFileConfig(filepath.Join(t.TempDir(), "no-such.yaml"))
+	if err != nil {
+		t.Fatalf("missing should be silent: %v", err)
+	}
+	if (fc != FileConfig{}) {
+		t.Errorf("expected zero-value, got %+v", fc)
+	}
+}
+
+func TestLoadFileConfig_Parse(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("interval: 10s\nidle_threshold: 30m\nagent_cpu_threshold: 42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fc, err := LoadFileConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.Interval != "10s" || fc.IdleThreshold != "30m" || fc.AgentCPUThreshold != 42 {
+		t.Errorf("got %+v", fc)
+	}
+}
+
+func TestFileConfig_ApplyTo(t *testing.T) {
+	cfg := Config{
+		IntervalSeconds:  5,
+		IdleThresholdSec: 120,
+		AgentCPUThresh:   5,
+	}
+	fc := FileConfig{
+		Interval:          "10s",
+		IdleThreshold:     "30m",
+		AgentCPUThreshold: 42,
+	}
+	if err := fc.ApplyTo(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IntervalSeconds != 10 || cfg.IdleThresholdSec != 1800 || cfg.AgentCPUThresh != 42 {
+		t.Errorf("got %+v", cfg)
+	}
+}
+
+func TestFileConfig_ApplyTo_BadDuration(t *testing.T) {
+	cfg := Config{}
+	fc := FileConfig{Interval: "not-a-duration"}
+	if err := fc.ApplyTo(&cfg); err == nil {
+		t.Fatal("expected error")
+	}
+}

@@ -32,6 +32,7 @@ func RunMenu() int {
 		fmt.Println("  [5] Projects")
 		fmt.Println("  [6] Companies")
 		fmt.Println("  [7] Rules")
+		fmt.Println("  [8] Config (init / show)")
 		fmt.Println("  [h] Help (full CLI usage)")
 		fmt.Println("  [q] Quit")
 		fmt.Print("\nChoice: ")
@@ -54,6 +55,8 @@ func RunMenu() int {
 			companyMenu(stdin)
 		case "7":
 			rulesMenu(stdin)
+		case "8":
+			configMenu(stdin)
 		case "h", "help":
 			printUsage(os.Stdout)
 		case "q", "Q", "":
@@ -227,6 +230,33 @@ func rulesMenu(stdin *bufio.Scanner) {
 				continue
 			}
 			rulesDelete([]string{idStr})
+		case "b", "":
+			return
+		default:
+			fmt.Println("  invalid choice")
+		}
+	}
+}
+
+func configMenu(stdin *bufio.Scanner) {
+	for {
+		fmt.Println()
+		fmt.Println("Config:")
+		fmt.Println("  [1] Show current config file")
+		fmt.Println("  [2] Init default config file")
+		fmt.Println("  [3] Print config file path")
+		fmt.Println("  [b] Back")
+		choice, ok := promptLine(stdin, "Choice: ")
+		if !ok {
+			return
+		}
+		switch choice {
+		case "1":
+			configShow()
+		case "2":
+			configInit()
+		case "3":
+			configPath()
 		case "b", "":
 			return
 		default:

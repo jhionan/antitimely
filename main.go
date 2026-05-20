@@ -32,6 +32,17 @@ func runDaemon(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+
+	// Load YAML config (~/.antitimely/config.yaml). Missing is fine.
+	if path, err := daemon.DefaultConfigFilePath(); err == nil {
+		fc, err := daemon.LoadFileConfig(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v (continuing with defaults)\n", err)
+		} else if err := fc.ApplyTo(&cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: config %s invalid: %v\n", path, err)
+		}
+	}
+
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	interval := fs.Duration("interval", time.Duration(cfg.IntervalSeconds)*time.Second, "Tick interval")
 	idleThresh := fs.Duration("idle-thresh", time.Duration(cfg.IdleThresholdSec)*time.Second, "Idle threshold")
