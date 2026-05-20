@@ -364,6 +364,7 @@ type StatusReply struct {
     UnassignedSignaturesCount int
     UserIdleSeconds           int
     TickIntervalSeconds       int
+    PermissionState           string               // "ok" | "accessibility_denied" | "unknown"
 }
 
 // --- Allowlist management ---
