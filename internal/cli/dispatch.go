@@ -32,6 +32,8 @@ func Dispatch(args []string) int {
 		return cmdRules(args[1:])
 	case "report":
 		return cmdReport(args[1:])
+	case "reset":
+		return cmdReset(args[1:])
 	case "config":
 		return cmdConfig(args[1:])
 	case "install-launch-agent":
@@ -57,6 +59,7 @@ Usage:
   antitimely review
   antitimely rules    list  |  delete <id>
   antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]
+  antitimely reset    all  |  ticks   [--yes]
   antitimely config   init  |  show  |  path
   antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
   antitimely uninstall-launch-agent   remove launch agent and stop background daemon

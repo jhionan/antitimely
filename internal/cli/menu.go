@@ -33,6 +33,7 @@ func RunMenu() int {
 		fmt.Println("  [6] Companies")
 		fmt.Println("  [7] Rules")
 		fmt.Println("  [8] Config (init / show)")
+		fmt.Println("  [9] Reset (wipe data)")
 		fmt.Println("  [h] Help (full CLI usage)")
 		fmt.Println("  [q] Quit")
 		fmt.Print("\nChoice: ")
@@ -57,6 +58,8 @@ func RunMenu() int {
 			rulesMenu(stdin)
 		case "8":
 			configMenu(stdin)
+		case "9":
+			resetMenu(stdin)
 		case "h", "help":
 			printUsage(os.Stdout)
 		case "q", "Q", "":
@@ -235,6 +238,28 @@ func rulesMenu(stdin *bufio.Scanner) {
 		default:
 			fmt.Println("  invalid choice")
 		}
+	}
+}
+
+func resetMenu(stdin *bufio.Scanner) {
+	fmt.Println()
+	fmt.Println("Reset:")
+	fmt.Println("  [1] Wipe time-tracking data only (preserve projects/companies/rules/watched)")
+	fmt.Println("  [2] Wipe EVERYTHING (full reset)")
+	fmt.Println("  [b] Back")
+	choice, ok := promptLine(stdin, "Choice: ")
+	if !ok {
+		return
+	}
+	switch choice {
+	case "1":
+		cmdReset([]string{"ticks"})
+	case "2":
+		cmdReset([]string{"all"})
+	case "b", "":
+		return
+	default:
+		fmt.Println("  invalid choice")
 	}
 }
 
