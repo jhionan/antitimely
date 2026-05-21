@@ -25,7 +25,7 @@ func IdleSecondsReal() (int, error) {
 			continue
 		}
 		raw := strings.TrimSpace(line[eq+1:])
-		ns, err := strconv.ParseUint(raw, 10, 64)
+		ns, err := strconv.ParseUint(raw, 0, 64)
 		if err != nil {
 			return 0, fmt.Errorf("parse HIDIdleTime %q: %w", raw, err)
 		}

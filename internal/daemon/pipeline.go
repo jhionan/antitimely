@@ -23,6 +23,7 @@ type Pipeline struct {
 	cache   *Cache
 	cfg     PipelineConfig
 	prevCPU map[int]uint64
+	perm    *PermissionTracker
 }
 
 func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
@@ -32,17 +33,25 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 	}
 }
 
+// SetPermissionTracker wires a shared PermissionTracker into the pipeline so
+// that accessibility denials detected during collectFocusSignal are propagated
+// to the RPC Status response. If not called, permission state is not updated.
+func (p *Pipeline) SetPermissionTracker(pt *PermissionTracker) {
+	p.perm = pt
+}
+
 // RunTick executes one observation cycle. now is the unix-epoch seconds of
 // this tick.
 func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	snap := p.cache.Snapshot()
 
 	idle, err := p.bridge.IdleSeconds()
+	userPresent := false
 	if err != nil {
 		log.Printf("idle: %v", err)
-		idle = 0
+	} else {
+		userPresent = idle < p.cfg.IdleThresholdSec
 	}
-	userPresent := idle < p.cfg.IdleThresholdSec
 
 	var signals []domain.Signal
 
@@ -99,10 +108,16 @@ func (p *Pipeline) collectFocusSignal(snap *CacheSnapshot) (domain.Signal, bool)
 	if err != nil {
 		if errors.Is(err, macos.ErrAccessibilityDenied) {
 			log.Printf("frontmost denied: %v", err)
+			if p.perm != nil {
+				p.perm.Set("accessibility_denied")
+			}
 		} else {
 			log.Printf("frontmost: %v", err)
 		}
 		return domain.Signal{}, false
+	}
+	if p.perm != nil {
+		p.perm.Set("ok")
 	}
 	if !snap.AllowedBundles[fm.BundleID] {
 		return domain.Signal{}, false
@@ -121,6 +136,15 @@ func (p *Pipeline) collectFocusSignal(snap *CacheSnapshot) (domain.Signal, bool)
 }
 
 func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []domain.Signal {
+	livePIDs := make(map[int]bool)
+	defer func() {
+		for pid := range p.prevCPU {
+			if !livePIDs[pid] {
+				delete(p.prevCPU, pid)
+			}
+		}
+	}()
+
 	procs, err := p.bridge.ListProcesses()
 	if err != nil {
 		log.Printf("ps: %v", err)
@@ -132,7 +156,6 @@ func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []
 		threshold = p.cfg.CPUDeltaThreshIdle
 	}
 
-	livePIDs := make(map[int]bool, len(procs))
 	var out []domain.Signal
 
 	for _, proc := range procs {
@@ -157,13 +180,6 @@ func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []
 			BinaryName: proc.Name,
 			Cwd:        cwd,
 		})
-	}
-
-	// Drop stale pids so prevCPU stays bounded.
-	for pid := range p.prevCPU {
-		if !livePIDs[pid] {
-			delete(p.prevCPU, pid)
-		}
 	}
 
 	return out

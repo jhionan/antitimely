@@ -20,8 +20,26 @@ type AntitimelyService struct {
 	Cache               *Cache
 	Bridge              macos.Bridge
 	TickIntervalSeconds int
-	PermissionState     string
+	Perm                *PermissionTracker
 	StartedAtUnix       int64 // set when the daemon boots; used to report uptime
+}
+
+// asInt64 coerces an interface value returned by sqlc for aggregate columns
+// (which can be int64, int32, or float64 depending on the driver) into int64.
+// Returns 0 if the value is nil or an unsupported type.
+func asInt64(v interface{}) int64 {
+	switch x := v.(type) {
+	case int64:
+		return x
+	case int32:
+		return int64(x)
+	case float64:
+		return int64(x)
+	case nil:
+		return 0
+	default:
+		return 0
+	}
 }
 
 // Status returns a live snapshot of daemon state.
@@ -58,10 +76,10 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	idle, _ := s.Bridge.IdleSeconds()
 	reply.UserIdleSeconds = idle
 	reply.TickIntervalSeconds = s.TickIntervalSeconds
-	if s.PermissionState == "" {
-		reply.PermissionState = "ok"
+	if s.Perm != nil {
+		reply.PermissionState = s.Perm.Get()
 	} else {
-		reply.PermissionState = s.PermissionState
+		reply.PermissionState = "ok"
 	}
 	if s.StartedAtUnix > 0 {
 		reply.DaemonUptimeSeconds = time.Now().Unix() - s.StartedAtUnix
@@ -84,12 +102,7 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	lastInvoice := map[int64]int64{} // company_id -> unix ts
 	for _, r := range lastInvoiceRows {
 		if r.LastSent != nil {
-			switch v := r.LastSent.(type) {
-			case int64:
-				lastInvoice[r.CompanyID] = v
-			case int32:
-				lastInvoice[r.CompanyID] = int64(v)
-			}
+			lastInvoice[r.CompanyID] = asInt64(r.LastSent)
 		}
 	}
 
@@ -364,7 +377,7 @@ func (s *AntitimelyService) PendingReview(args rpcapi.PendingReviewArgs, reply *
 	}
 	reply.Signatures = make([]rpcapi.Signature, 0, len(rows))
 	for _, r := range rows {
-		lastSeen, _ := r.LastSeen.(int64)
+		lastSeen := asInt64(r.LastSeen)
 		reply.Signatures = append(reply.Signatures, rpcapi.Signature{
 			ObservationID: r.ID,
 			Source:        r.Source,

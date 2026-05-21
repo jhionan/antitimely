@@ -66,11 +66,13 @@ func Run(cfg Config) error {
 
 	bridge := macos.RealBridge{}
 	cache := NewCache()
+	pt := NewPermissionTracker()
 	svc := &AntitimelyService{
 		Q:                   q,
 		Cache:               cache,
 		Bridge:              bridge,
 		TickIntervalSeconds: cfg.IntervalSeconds,
+		Perm:                pt,
 		StartedAtUnix:       time.Now().Unix(),
 	}
 	if err := svc.ReloadCache(); err != nil {
@@ -82,6 +84,7 @@ func Run(cfg Config) error {
 		CPUDeltaThresh:     cfg.AgentCPUThresh,
 		CPUDeltaThreshIdle: cfg.AgentCPUThreshIdle,
 	})
+	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 
 	listener, err := acquireSocket(cfg.SocketPath)

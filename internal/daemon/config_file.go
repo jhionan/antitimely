@@ -67,6 +67,9 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 			return fmt.Errorf("idle_threshold: %w", err)
 		}
 		cfg.IdleThresholdSec = int(d.Seconds())
+		if cfg.IdleThresholdSec < 1 {
+			cfg.IdleThresholdSec = 1
+		}
 	}
 	if fc.AgentCPUThreshold != 0 {
 		cfg.AgentCPUThresh = fc.AgentCPUThreshold

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 
@@ -217,5 +218,65 @@ func TestPipeline_AgentSignal_TaggedByRule(t *testing.T) {
 	}
 	if rows[0].Name != "foca-api" || rows[0].TickCount != 1 {
 		t.Errorf("got %+v", rows[0])
+	}
+}
+
+func TestPipeline_IdleError_NoFocusSignal(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{
+		AllowedBundles: map[string]bool{"com.example.app": true},
+	})
+	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
+	br.FocusedTitle = "some window"
+	// Simulate IdleSeconds returning an error — should treat user as idle,
+	// so no focus signal fires.
+	br.IdleErr = errors.New("boom")
+
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 ticks when idle check fails, got %d", n)
+	}
+}
+
+func TestPipeline_AgentSignal_StalePIDsPrunedOnPSFailure(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{"claude": true},
+	})
+	br.IdleSecondsVal = 5 // user present
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	// Establish prevCPU entry via a successful tick.
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick #1: %v", err)
+	}
+	if _, ok := p.prevCPU[999]; !ok {
+		t.Fatal("expected prevCPU[999] to be set after first tick")
+	}
+
+	// Now make ListProcesses fail.
+	br.ProcessesErr = errors.New("ps failed")
+
+	if err := p.RunTick(ctx, 1005); err != nil {
+		t.Fatalf("RunTick #2: %v", err)
+	}
+
+	// The defer in collectAgentSignals should have pruned all stale PIDs.
+	if len(p.prevCPU) != 0 {
+		t.Errorf("expected prevCPU to be empty after ps failure, got %d entries", len(p.prevCPU))
 	}
 }
