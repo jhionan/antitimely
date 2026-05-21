@@ -601,6 +601,116 @@ func (s *AntitimelyService) Report(args rpcapi.ReportArgs, reply *rpcapi.ReportR
 	return nil
 }
 
+// Summary returns per-project tracked hours grouped by company for an arbitrary
+// date range, along with unassigned seconds and the cwd prefixes known for each
+// project (derived from its match_cwd_prefix rules).
+func (s *AntitimelyService) Summary(args rpcapi.SummaryArgs, reply *rpcapi.SummaryReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	tickSec := int64(s.TickIntervalSeconds)
+
+	// Per-project tick totals in range.
+	totalRows, err := s.Q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: args.FromUnix, Ts_2: args.ToUnix})
+	if err != nil {
+		return err
+	}
+	secondsByName := map[string]int64{}
+	for _, r := range totalRows {
+		secondsByName[r.Name] = r.TickCount * tickSec
+	}
+
+	// Projects with company info.
+	projRows, err := s.Q.ListProjectsWithCompany(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Collect cwd prefixes per project ID from rules.
+	ruleRows, err := s.Q.ListRulesForCache(ctx)
+	if err != nil {
+		return err
+	}
+	cwdByProjectID := map[int64][]string{}
+	seen := map[int64]map[string]bool{}
+	for _, r := range ruleRows {
+		if !r.MatchCwdPrefix.Valid || r.MatchCwdPrefix.String == "" {
+			continue
+		}
+		if seen[r.ProjectID] == nil {
+			seen[r.ProjectID] = map[string]bool{}
+		}
+		prefix := r.MatchCwdPrefix.String
+		if !seen[r.ProjectID][prefix] {
+			seen[r.ProjectID][prefix] = true
+			cwdByProjectID[r.ProjectID] = append(cwdByProjectID[r.ProjectID], prefix)
+		}
+	}
+
+	// Group projects by company, applying optional filters.
+	type compKey struct {
+		id   int64
+		name string
+	}
+	compMap := map[compKey]*rpcapi.SummaryCompany{}
+	var noCompany *rpcapi.SummaryCompany
+
+	for _, pr := range projRows {
+		// Optional project / company filters.
+		if args.ProjectName != "" && pr.Name != args.ProjectName {
+			continue
+		}
+		if args.CompanyName != "" {
+			if !pr.CompanyID.Valid || pr.CompanyName.String != args.CompanyName {
+				continue
+			}
+		}
+
+		sp := rpcapi.SummaryProject{
+			Name:        pr.Name,
+			Seconds:     secondsByName[pr.Name],
+			CwdPrefixes: cwdByProjectID[pr.ID],
+		}
+
+		if !pr.CompanyID.Valid {
+			if noCompany == nil {
+				noCompany = &rpcapi.SummaryCompany{Name: "(unassigned)"}
+			}
+			noCompany.Projects = append(noCompany.Projects, sp)
+		} else {
+			ck := compKey{id: pr.CompanyID.Int64, name: pr.CompanyName.String}
+			ct := compMap[ck]
+			if ct == nil {
+				ct = &rpcapi.SummaryCompany{Name: pr.CompanyName.String}
+				compMap[ck] = ct
+			}
+			ct.Projects = append(ct.Projects, sp)
+		}
+	}
+
+	// Sort companies by name.
+	compKeys := make([]compKey, 0, len(compMap))
+	for k := range compMap {
+		compKeys = append(compKeys, k)
+	}
+	sort.Slice(compKeys, func(i, j int) bool {
+		return compKeys[i].name < compKeys[j].name
+	})
+	for _, k := range compKeys {
+		reply.Companies = append(reply.Companies, *compMap[k])
+	}
+	if noCompany != nil {
+		reply.Companies = append(reply.Companies, *noCompany)
+	}
+
+	// Unassigned ticks in range.
+	unassigned, err := s.Q.UnassignedTicksInRange(ctx, store.UnassignedTicksInRangeParams{Ts: args.FromUnix, Ts_2: args.ToUnix})
+	if err != nil {
+		return err
+	}
+	reply.UnassignedSeconds = unassigned * tickSec
+	return nil
+}
+
 // CompanyAdd creates a new company and returns its ID.
 func (s *AntitimelyService) CompanyAdd(args rpcapi.CompanyAddArgs, reply *rpcapi.CompanyAddReply) error {
 	ctx, cancel := handlerCtx()

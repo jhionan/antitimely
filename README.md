@@ -109,6 +109,21 @@ agent_cpu_threshold_idle: 100 # centiseconds/tick when user is idle
 idle_threshold: 2m
 ```
 
+### Generating work summaries
+
+`atl summary` emits a markdown report combining tracked hours per project with the git commits in each project's directory for the same date range — perfect for piping into a coding agent that polishes it into an invoice description.
+
+```bash
+atl summary --from=2026-05-19 --to=2026-05-26
+atl summary --from=2026-05-19 --to=2026-05-26 | claude "polish into invoice descriptions"
+```
+
+Flags:
+- `--from`, `--to` — date range (default: today)
+- `--project=<name>`, `--company=<name>` — filter scope
+- `--all-authors` — include commits by all authors (default: only yours via `git config user.email`)
+- `--txt` — plain text instead of markdown
+
 ### Agents driving the CLI
 
 Agents themselves can use the CLI to query or update state. Useful patterns:
@@ -156,6 +171,7 @@ Precedence: defaults → config file → CLI flags on `atl daemon`.
 | `atl status` | current grouped totals + daemon uptime, idle, permission state |
 | `atl review` | walk through unassigned observations, tag them, build rules |
 | `atl report [--from --to]` | date-range totals |
+| `atl summary [--from --to] [--project --company] [--all-authors] [--txt]` | markdown report: hours + git commits per project |
 | `atl company add\|list\|delete <name>` | manage companies |
 | `atl project add [--company=<c>] <name>` | manage projects |
 | `atl project list\|delete\|set-company` | … |

@@ -169,6 +169,28 @@ type ReportReply struct {
 	Unassigned int64
 }
 
+// --- Summary ---
+
+type SummaryArgs struct {
+	FromUnix    int64
+	ToUnix      int64
+	ProjectName string // optional filter
+	CompanyName string // optional filter
+}
+type SummaryReply struct {
+	Companies         []SummaryCompany
+	UnassignedSeconds int64
+}
+type SummaryCompany struct {
+	Name     string
+	Projects []SummaryProject
+}
+type SummaryProject struct {
+	Name        string
+	Seconds     int64
+	CwdPrefixes []string // from cwd-prefix rules; may be empty if project has no cwd rules
+}
+
 // --- Companies ---
 
 type CompanyAddArgs struct{ Name string }

@@ -28,6 +28,7 @@ func RunMenu() int {
 		fmt.Println("  [1] Status")
 		fmt.Println("  [2] Review unassigned signatures")
 		fmt.Println("  [3] Report (today)")
+		fmt.Println("  [s] Summary (week with git commits)")
 		fmt.Println("  [4] Watch programs")
 		fmt.Println("  [5] Projects")
 		fmt.Println("  [6] Companies")
@@ -49,6 +50,8 @@ func RunMenu() int {
 			cmdReview(nil)
 		case "3":
 			cmdReport(nil)
+		case "s", "S":
+			cmdSummary(nil)
 		case "4":
 			watchMenu(stdin)
 		case "5":
