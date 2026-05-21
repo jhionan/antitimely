@@ -166,3 +166,12 @@ FROM ticks t
 JOIN projects p ON p.id = t.project_id
 WHERE t.ts >= ?
 GROUP BY p.id;
+
+-- name: AssignedDistinctTicksInRange :one
+-- COUNT(DISTINCT ts) of project-assigned ticks in a half-open range.
+-- Used by Status to compute today's total without double-counting
+-- timestamps that have ticks for multiple projects (the sum-of-per-project
+-- counts overcounts those collisions).
+SELECT COUNT(DISTINCT ts) AS tick_count
+FROM ticks
+WHERE project_id IS NOT NULL AND ts >= ? AND ts < ?;

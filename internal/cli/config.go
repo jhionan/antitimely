@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -67,7 +69,7 @@ func configShow() int {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "no config file at %s (run `antitimely config init` to create one)\n", p)
 			return 1
 		}

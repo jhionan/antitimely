@@ -14,7 +14,10 @@ func cmdReport(args []string) int {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	fromStr := fs.String("from", "", "Inclusive start date YYYY-MM-DD (default today)")
 	toStr := fs.String("to", "", "Exclusive end date YYYY-MM-DD (default tomorrow)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
 
 	now := time.Now()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())

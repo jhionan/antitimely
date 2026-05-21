@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"log"
 	"time"
 )
 
@@ -29,7 +30,14 @@ func (p *Poller) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			_ = p.runner.RunTick(ctx, now.Unix())
+			if err := p.runner.RunTick(ctx, now.Unix()); err != nil {
+				// The pipeline already best-effort-logs per-call failures
+				// internally; surfacing a returned error means something
+				// it considered fatal escaped. Log it loud so the user
+				// sees it in daemon.err — the alternative is a silent
+				// stopped tracker.
+				log.Printf("tick error: %v", err)
+			}
 		}
 	}
 }

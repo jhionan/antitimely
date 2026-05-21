@@ -53,7 +53,10 @@ func rulesList() int {
 
 func rulesDelete(args []string) int {
 	fs := flag.NewFlagSet("rules delete", flag.ExitOnError)
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: antitimely rules delete <id>")
 		return 64

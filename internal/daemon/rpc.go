@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -16,12 +17,25 @@ import (
 
 // AntitimelyService exposes all daemon operations over net/rpc.
 type AntitimelyService struct {
+	DB                  *sql.DB
 	Q                   *store.Queries
 	Cache               *Cache
 	Bridge              macos.Bridge
 	TickIntervalSeconds int
 	Perm                *PermissionTracker
 	StartedAtUnix       int64 // set when the daemon boots; used to report uptime
+}
+
+// rpcHandlerDeadline bounds any single RPC handler. SQLite on a slow filesystem
+// or under contention can stall arbitrary queries; without a per-handler cap
+// a hung query would pin the connection (which is also the only DB connection
+// — see SetMaxOpenConns(1) in openDB).
+const rpcHandlerDeadline = 10 * time.Second
+
+// handlerCtx returns a context bounded by rpcHandlerDeadline. Callers must
+// defer the returned cancel.
+func handlerCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), rpcHandlerDeadline)
 }
 
 // asInt64 coerces an interface value returned by sqlc for aggregate columns
@@ -44,7 +58,8 @@ func asInt64(v interface{}) int64 {
 
 // Status returns a live snapshot of daemon state.
 func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 	endOfDay := startOfDay + 86400
@@ -73,8 +88,11 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	}
 	reply.UnassignedSignaturesCount = int(pending)
 
-	idle, _ := s.Bridge.IdleSeconds()
-	reply.UserIdleSeconds = idle
+	if idle, err := s.Bridge.IdleSeconds(ctx); err != nil {
+		log.Printf("status idle: %v", err)
+	} else {
+		reply.UserIdleSeconds = idle
+	}
 	reply.TickIntervalSeconds = s.TickIntervalSeconds
 	if s.Perm != nil {
 		reply.PermissionState = s.Perm.Get()
@@ -87,12 +105,16 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 
 	// --- New grouped fields ---
 
-	// Today's grand total (distinct tick timestamps across all projects).
-	var todayTotal int64
-	for _, r := range todayTotals {
-		todayTotal += r.TickCount
+	// Today's grand total: COUNT(DISTINCT ts) of assigned ticks in the day
+	// range. Computed via a dedicated query rather than summing per-project
+	// counts because a single ts can produce ticks for multiple projects
+	// (e.g. simultaneous focus + agent signals) and summation overcounts
+	// those collisions.
+	todayAssigned, err := s.Q.AssignedDistinctTicksInRange(ctx, store.AssignedDistinctTicksInRangeParams{Ts: startOfDay, Ts_2: endOfDay})
+	if err != nil {
+		return err
 	}
-	reply.TodayTotalSeconds = todayTotal * tickSec
+	reply.TodayTotalSeconds = todayAssigned * tickSec
 
 	// Last invoice timestamps per company_id.
 	lastInvoiceRows, err := s.Q.LastInvoicePerCompany(ctx)
@@ -224,7 +246,8 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 // ReloadCache rebuilds the cache snapshot from the DB and atomically swaps it.
 // Called on daemon startup and after every mutation handler.
 func (s *AntitimelyService) ReloadCache() error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	watched, err := s.Q.ListWatchedPrograms(ctx)
 	if err != nil {
 		return err
@@ -277,7 +300,8 @@ var errBadKind = errors.New("kind must be 'bundle' or 'binary'")
 
 // WatchAdd adds a program to the allowlist and refreshes the cache.
 func (s *AntitimelyService) WatchAdd(args rpcapi.WatchAddArgs, reply *rpcapi.WatchAddReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if args.Kind != "bundle" && args.Kind != "binary" {
 		return errBadKind
 	}
@@ -291,7 +315,8 @@ func (s *AntitimelyService) WatchAdd(args rpcapi.WatchAddArgs, reply *rpcapi.Wat
 
 // WatchRemove removes a program from the allowlist and refreshes the cache.
 func (s *AntitimelyService) WatchRemove(args rpcapi.WatchRemoveArgs, reply *rpcapi.WatchRemoveReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if err := s.Q.RemoveWatchedProgram(ctx, store.RemoveWatchedProgramParams{
 		Kind: args.Kind, Identifier: args.Identifier,
 	}); err != nil {
@@ -302,7 +327,8 @@ func (s *AntitimelyService) WatchRemove(args rpcapi.WatchRemoveArgs, reply *rpca
 
 // WatchList returns all currently watched programs.
 func (s *AntitimelyService) WatchList(args rpcapi.WatchListArgs, reply *rpcapi.WatchListReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	rows, err := s.Q.ListWatchedPrograms(ctx)
 	if err != nil {
 		return err
@@ -316,7 +342,8 @@ func (s *AntitimelyService) WatchList(args rpcapi.WatchListArgs, reply *rpcapi.W
 
 // ProjectAdd creates a new project and returns its ID.
 func (s *AntitimelyService) ProjectAdd(args rpcapi.ProjectAddArgs, reply *rpcapi.ProjectAddReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	var companyID sql.NullInt64
 	if args.CompanyName != "" {
 		c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
@@ -339,7 +366,8 @@ func (s *AntitimelyService) ProjectAdd(args rpcapi.ProjectAddArgs, reply *rpcapi
 
 // ProjectList returns all projects ordered by name.
 func (s *AntitimelyService) ProjectList(args rpcapi.ProjectListArgs, reply *rpcapi.ProjectListReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	rows, err := s.Q.ListProjects(ctx)
 	if err != nil {
 		return err
@@ -357,7 +385,8 @@ func (s *AntitimelyService) ProjectList(args rpcapi.ProjectListArgs, reply *rpca
 
 // ProjectDelete removes a project by name and refreshes the cache.
 func (s *AntitimelyService) ProjectDelete(args rpcapi.ProjectDeleteArgs, reply *rpcapi.ProjectDeleteReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if err := s.Q.DeleteProjectByName(ctx, args.Name); err != nil {
 		return err
 	}
@@ -366,7 +395,8 @@ func (s *AntitimelyService) ProjectDelete(args rpcapi.ProjectDeleteArgs, reply *
 
 // PendingReview returns observations that have unassigned ticks and need tagging.
 func (s *AntitimelyService) PendingReview(args rpcapi.PendingReviewArgs, reply *rpcapi.PendingReviewReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	limit := args.Limit
 	if limit <= 0 {
 		limit = 50
@@ -394,8 +424,15 @@ func (s *AntitimelyService) PendingReview(args rpcapi.PendingReviewArgs, reply *
 
 // TagSignature assigns ticks for an observation to a project, optionally
 // creating a rule to retag all matching unassigned ticks retroactively.
+//
+// When a rule is created, the rule insert + retroactive retag run inside
+// a single transaction: if either fails, neither commits. Without this,
+// a crash between the two would leave an orphan rule with no historical
+// ticks attributed, or — worse — a concurrent poll tick arriving between
+// the two steps could insert new matching ticks that the retag would miss.
 func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rpcapi.TagSignatureReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	now := time.Now().Unix()
 
 	proj, err := s.Q.GetProjectByName(ctx, args.ProjectName)
@@ -423,7 +460,19 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return nil
 	}
 
-	rid, err := s.Q.AddRule(ctx, store.AddRuleParams{
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	qtx := s.Q.WithTx(tx)
+
+	rid, err := qtx.AddRule(ctx, store.AddRuleParams{
 		ProjectID:        proj.ID,
 		Priority:         args.Rule.Priority,
 		MatchBundleID:    nullStr(args.Rule.MatchBundleID),
@@ -436,11 +485,11 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return err
 	}
 
-	// Build params for ApplyRuleRetroactivelyCounted.
-	// sqlc generated Column2/Column4/Column6/Column8 as the IS NULL sentinels
-	// because the query uses bare "?" placeholders for the null checks.
-	// We pass the NullString itself as Column2/4/6/8 (nil when not valid) and
-	// the plain string as the equality operand Column3/5/7/9.
+	// Build params for ApplyRuleRetroactivelyCounted. sqlc generated
+	// Column2/Column4/Column6/Column8 as the IS NULL sentinels because the
+	// query uses bare "?" placeholders for the null checks; pass the
+	// NullString itself for those (nil when not valid) and the plain string
+	// for the equality operand.
 	bundleNull := nullStr(args.Rule.MatchBundleID)
 	titleNull := nullStr(args.Rule.MatchTitleSubstr)
 	binaryNull := nullStr(args.Rule.MatchBinaryName)
@@ -463,7 +512,7 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		cwdCol8 = cwdNull.String
 	}
 
-	count, err := s.Q.ApplyRuleRetroactivelyCounted(ctx, store.ApplyRuleRetroactivelyCountedParams{
+	count, err := qtx.ApplyRuleRetroactivelyCounted(ctx, store.ApplyRuleRetroactivelyCountedParams{
 		ProjectID:  sql.NullInt64{Int64: proj.ID, Valid: true},
 		Column2:    bundleCol2,
 		BundleID:   args.Rule.MatchBundleID,
@@ -478,6 +527,11 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return err
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+
 	reply.RuleCreated = true
 	reply.RuleID = rid
 	reply.TicksRetagged = count
@@ -486,7 +540,8 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 
 // IgnoreSignature marks an observation so it won't appear in the review queue.
 func (s *AntitimelyService) IgnoreSignature(args rpcapi.IgnoreSignatureArgs, reply *rpcapi.IgnoreSignatureReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	return s.Q.IgnoreObservation(ctx, store.IgnoreObservationParams{
 		ObservationID: args.ObservationID,
 		IgnoredAt:     time.Now().Unix(),
@@ -495,7 +550,8 @@ func (s *AntitimelyService) IgnoreSignature(args rpcapi.IgnoreSignatureArgs, rep
 
 // RulesList returns all rules joined with their project name.
 func (s *AntitimelyService) RulesList(args rpcapi.RulesListArgs, reply *rpcapi.RulesListReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	rows, err := s.Q.ListRules(ctx)
 	if err != nil {
 		return err
@@ -517,7 +573,8 @@ func (s *AntitimelyService) RulesList(args rpcapi.RulesListArgs, reply *rpcapi.R
 
 // RuleDelete removes a rule by ID and refreshes the cache.
 func (s *AntitimelyService) RuleDelete(args rpcapi.RuleDeleteArgs, reply *rpcapi.RuleDeleteReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if err := s.Q.DeleteRule(ctx, args.ID); err != nil {
 		return err
 	}
@@ -526,7 +583,8 @@ func (s *AntitimelyService) RuleDelete(args rpcapi.RuleDeleteArgs, reply *rpcapi
 
 // Report returns per-project tick totals and unassigned tick count for a time range.
 func (s *AntitimelyService) Report(args rpcapi.ReportArgs, reply *rpcapi.ReportReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	rows, err := s.Q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: args.FromUnix, Ts_2: args.ToUnix})
 	if err != nil {
 		return err
@@ -545,7 +603,8 @@ func (s *AntitimelyService) Report(args rpcapi.ReportArgs, reply *rpcapi.ReportR
 
 // CompanyAdd creates a new company and returns its ID.
 func (s *AntitimelyService) CompanyAdd(args rpcapi.CompanyAddArgs, reply *rpcapi.CompanyAddReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	id, err := s.Q.AddCompany(ctx, store.AddCompanyParams{
 		Name: args.Name, CreatedAt: time.Now().Unix(),
 	})
@@ -558,7 +617,8 @@ func (s *AntitimelyService) CompanyAdd(args rpcapi.CompanyAddArgs, reply *rpcapi
 
 // CompanyList returns all companies ordered by name.
 func (s *AntitimelyService) CompanyList(args rpcapi.CompanyListArgs, reply *rpcapi.CompanyListReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	rows, err := s.Q.ListCompanies(ctx)
 	if err != nil {
 		return err
@@ -572,13 +632,15 @@ func (s *AntitimelyService) CompanyList(args rpcapi.CompanyListArgs, reply *rpca
 
 // CompanyDelete removes a company by name.
 func (s *AntitimelyService) CompanyDelete(args rpcapi.CompanyDeleteArgs, reply *rpcapi.CompanyDeleteReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	return s.Q.DeleteCompanyByName(ctx, args.Name)
 }
 
 // ProjectSetCompany assigns or unassigns a company from a project.
 func (s *AntitimelyService) ProjectSetCompany(args rpcapi.ProjectSetCompanyArgs, reply *rpcapi.ProjectSetCompanyReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	var companyID sql.NullInt64
 	if args.CompanyName != "" {
 		c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
@@ -595,7 +657,8 @@ func (s *AntitimelyService) ProjectSetCompany(args rpcapi.ProjectSetCompanyArgs,
 
 // InvoiceSend records that an invoice was sent to a company.
 func (s *AntitimelyService) InvoiceSend(args rpcapi.InvoiceSendArgs, reply *rpcapi.InvoiceSendReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
 	if err != nil {
 		return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
@@ -619,7 +682,8 @@ func (s *AntitimelyService) InvoiceSend(args rpcapi.InvoiceSendArgs, reply *rpca
 
 // InvoiceList returns invoices, optionally filtered to a single company.
 func (s *AntitimelyService) InvoiceList(args rpcapi.InvoiceListArgs, reply *rpcapi.InvoiceListReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if args.CompanyName == "" {
 		rows, err := s.Q.ListAllInvoices(ctx)
 		if err != nil {
@@ -650,7 +714,8 @@ func (s *AntitimelyService) InvoiceList(args rpcapi.InvoiceListArgs, reply *rpca
 
 // InvoiceDelete removes an invoice by ID.
 func (s *AntitimelyService) InvoiceDelete(args rpcapi.InvoiceDeleteArgs, reply *rpcapi.InvoiceDeleteReply) error {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	return s.Q.DeleteInvoice(ctx, args.ID)
 }
 

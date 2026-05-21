@@ -155,6 +155,28 @@ func (q *Queries) ApplyRuleRetroactivelyCounted(ctx context.Context, arg ApplyRu
 	return result.RowsAffected()
 }
 
+const assignedDistinctTicksInRange = `-- name: AssignedDistinctTicksInRange :one
+SELECT COUNT(DISTINCT ts) AS tick_count
+FROM ticks
+WHERE project_id IS NOT NULL AND ts >= ? AND ts < ?
+`
+
+type AssignedDistinctTicksInRangeParams struct {
+	Ts   int64
+	Ts_2 int64
+}
+
+// COUNT(DISTINCT ts) of project-assigned ticks in a half-open range.
+// Used by Status to compute today's total without double-counting
+// timestamps that have ticks for multiple projects (the sum-of-per-project
+// counts overcounts those collisions).
+func (q *Queries) AssignedDistinctTicksInRange(ctx context.Context, arg AssignedDistinctTicksInRangeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, assignedDistinctTicksInRange, arg.Ts, arg.Ts_2)
+	var tick_count int64
+	err := row.Scan(&tick_count)
+	return tick_count, err
+}
+
 const countPendingReviewSignatures = `-- name: CountPendingReviewSignatures :one
 SELECT COUNT(DISTINCT o.id) AS n
 FROM observations o

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -12,9 +13,10 @@ func main() {
 		fmt.Println("usage: smoke <ps|lsof|ioreg|frontmost|title>")
 		os.Exit(64)
 	}
+	ctx := context.Background()
 	switch os.Args[1] {
 	case "ps":
-		procs, err := macos.ListProcessesReal()
+		procs, err := macos.ListProcessesReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -27,21 +29,21 @@ func main() {
 			fmt.Printf("  pid=%d name=%q cpu_ticks=%d\n", p.PID, p.Name, p.CPUTicks)
 		}
 	case "frontmost":
-		fi, err := macos.FrontmostReal()
+		fi, err := macos.FrontmostReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		fmt.Printf("bundle=%q name=%q pid=%d\n", fi.BundleID, fi.Name, fi.PID)
 	case "title":
-		t, err := macos.FocusedWindowTitleReal()
+		t, err := macos.FocusedWindowTitleReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		fmt.Printf("title=%q\n", t)
 	case "ioreg":
-		s, err := macos.IdleSecondsReal()
+		s, err := macos.IdleSecondsReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -58,7 +60,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		cwd, err := macos.ProcessCWDReal(pid)
+		cwd, err := macos.ProcessCWDReal(ctx, pid)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

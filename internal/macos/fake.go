@@ -1,5 +1,7 @@
 package macos
 
+import "context"
+
 // FakeBridge is an in-memory test implementation of Bridge. All fields are
 // public so tests can mutate state between calls.
 type FakeBridge struct {
@@ -15,23 +17,36 @@ type FakeBridge struct {
 	Processes    []ProcessSample
 	ProcessesErr error
 
+	// CWDByPID maps pid -> cwd. PIDs absent from the map and absent from
+	// CWDErrByPID return ("", nil) — matching the real implementation's
+	// behavior when lsof exits 1 (no cwd available).
 	CWDByPID map[int]string
-	CWDErr   error
+
+	// CWDErrByPID lets tests inject per-pid errors. Takes precedence over
+	// CWDErr. Use this when you need a mixed-permission scenario (e.g.
+	// lookup succeeds for one pid but is denied for another on the same tick).
+	CWDErrByPID map[int]error
+
+	// CWDErr applies to every pid when set, unless overridden by CWDErrByPID.
+	CWDErr error
 }
 
-func (f *FakeBridge) Frontmost() (FrontmostInfo, error) {
+func (f *FakeBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
 	return f.FrontmostInfoVal, f.FrontmostErr
 }
-func (f *FakeBridge) FocusedWindowTitle() (string, error) {
+func (f *FakeBridge) FocusedWindowTitle(ctx context.Context) (string, error) {
 	return f.FocusedTitle, f.FocusedTitleErr
 }
-func (f *FakeBridge) IdleSeconds() (int, error) {
+func (f *FakeBridge) IdleSeconds(ctx context.Context) (int, error) {
 	return f.IdleSecondsVal, f.IdleErr
 }
-func (f *FakeBridge) ListProcesses() ([]ProcessSample, error) {
+func (f *FakeBridge) ListProcesses(ctx context.Context) ([]ProcessSample, error) {
 	return f.Processes, f.ProcessesErr
 }
-func (f *FakeBridge) ProcessCWD(pid int) (string, error) {
+func (f *FakeBridge) ProcessCWD(ctx context.Context, pid int) (string, error) {
+	if err, ok := f.CWDErrByPID[pid]; ok {
+		return "", err
+	}
 	if f.CWDErr != nil {
 		return "", f.CWDErr
 	}

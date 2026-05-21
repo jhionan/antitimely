@@ -88,9 +88,12 @@ func handleOneSignature(client *rpc.Client, stdin *bufio.Scanner, sig rpcapi.Sig
 	case "s":
 		return 0
 	case "i":
-		_ = client.Call(rpcapi.ServiceName+".IgnoreSignature",
+		if err := client.Call(rpcapi.ServiceName+".IgnoreSignature",
 			rpcapi.IgnoreSignatureArgs{ObservationID: sig.ObservationID},
-			&rpcapi.IgnoreSignatureReply{})
+			&rpcapi.IgnoreSignatureReply{}); err != nil {
+			fmt.Fprintln(os.Stderr, "  ignore failed:", err)
+			return 0
+		}
 		fmt.Println("  ignored.")
 		return 0
 	case "n":

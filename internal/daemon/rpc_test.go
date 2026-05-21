@@ -30,6 +30,7 @@ func setupRPCServer(t *testing.T) (*rpc.Client, *sql.DB, *Cache) {
 	}
 	cache := NewCache()
 	svc := &AntitimelyService{
+		DB:                  db,
 		Q:                   store.New(db),
 		Cache:               cache,
 		Bridge:              &macos.FakeBridge{},

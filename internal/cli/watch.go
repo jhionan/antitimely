@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/rpc"
 	"os"
+	"strings"
 
 	"github.com/rian/antitimely/internal/rpcapi"
 )
@@ -90,12 +91,28 @@ func watchRemove(args []string) int {
 	}
 	defer client.Close()
 
+	// The identifier could be either kind; try both, track which (if any)
+	// actually existed. Reporting "Removed" when both calls failed would
+	// silently lie to the user.
+	var (
+		removed []string
+		lastErr error
+	)
 	for _, kind := range []string{"bundle", "binary"} {
-		_ = client.Call(rpcapi.ServiceName+".WatchRemove",
+		err := client.Call(rpcapi.ServiceName+".WatchRemove",
 			rpcapi.WatchRemoveArgs{Kind: kind, Identifier: args[0]},
 			&rpcapi.WatchRemoveReply{})
+		if err == nil {
+			removed = append(removed, kind)
+		} else {
+			lastErr = err
+		}
 	}
-	fmt.Printf("Removed: %s\n", args[0])
+	if len(removed) == 0 {
+		fmt.Fprintln(os.Stderr, "remove failed:", lastErr)
+		return 1
+	}
+	fmt.Printf("Removed: %s (%s)\n", args[0], strings.Join(removed, ", "))
 	return 0
 }
 

@@ -2,7 +2,9 @@ package macos
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -12,14 +14,19 @@ import (
 // ListProcessesReal shells out to `ps -A -o pid=,comm=,time=` and parses one
 // row per process. CPU time is converted from MM:SS.HH (or HH:MM:SS) into
 // centiseconds.
-func ListProcessesReal() ([]ProcessSample, error) {
-	cmd := exec.Command("ps", "-A", "-o", "pid=", "-o", "comm=", "-o", "time=")
+func ListProcessesReal(ctx context.Context) ([]ProcessSample, error) {
+	cctx, cancel := withTimeout(ctx, psDeadline)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "ps", "-A", "-o", "pid=", "-o", "comm=", "-o", "time=")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
 	}
 
-	var samples []ProcessSample
+	var (
+		samples []ProcessSample
+		skipped int
+	)
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -28,10 +35,12 @@ func ListProcessesReal() ([]ProcessSample, error) {
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
+			skipped++
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
+			skipped++
 			continue
 		}
 		timeField := fields[len(fields)-1]
@@ -40,11 +49,17 @@ func ListProcessesReal() ([]ProcessSample, error) {
 
 		cs, err := parseCPUTime(timeField)
 		if err != nil {
+			skipped++
 			continue
 		}
 		samples = append(samples, ProcessSample{
 			PID: pid, Name: comm, CPUTicks: cs,
 		})
+	}
+	if skipped > 0 {
+		// One line per call (not per row) so a permanent format change is
+		// noticed but transient single-row glitches don't spam.
+		log.Printf("ps: skipped %d unparseable row(s)", skipped)
 	}
 	return samples, scanner.Err()
 }

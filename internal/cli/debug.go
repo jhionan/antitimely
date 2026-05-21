@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -12,9 +13,10 @@ func cmdDebug(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: antitimely debug <windows|frontmost|idle>")
 		return 64
 	}
+	ctx := context.Background()
 	switch args[0] {
 	case "windows":
-		out, err := macos.FocusedWindowDebugReal()
+		out, err := macos.FocusedWindowDebugReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -22,7 +24,7 @@ func cmdDebug(args []string) int {
 		fmt.Print(out)
 		return 0
 	case "frontmost":
-		fi, err := macos.FrontmostReal()
+		fi, err := macos.FrontmostReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -30,7 +32,7 @@ func cmdDebug(args []string) int {
 		fmt.Printf("bundle=%q name=%q pid=%d\n", fi.BundleID, fi.Name, fi.PID)
 		return 0
 	case "idle":
-		s, err := macos.IdleSecondsReal()
+		s, err := macos.IdleSecondsReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

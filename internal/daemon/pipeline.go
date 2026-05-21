@@ -45,10 +45,19 @@ func (p *Pipeline) SetPermissionTracker(pt *PermissionTracker) {
 func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	snap := p.cache.Snapshot()
 
-	idle, err := p.bridge.IdleSeconds()
-	userPresent := false
+	idle, err := p.bridge.IdleSeconds(ctx)
+	// Fail open: if we can't read idle state, assume the user is present.
+	// The previous "userPresent = false on error" default silently flipped
+	// the agent CPU threshold to the much stricter idle bar, so a broken
+	// ioreg dropped most agent ticks with no user-visible signal beyond
+	// a log line. Better to keep tracking (and surface the failure) than
+	// to silently degrade.
+	userPresent := true
 	if err != nil {
 		log.Printf("idle: %v", err)
+		if p.perm != nil {
+			p.perm.Set("idle_detection_failed")
+		}
 	} else {
 		userPresent = idle < p.cfg.IdleThresholdSec
 	}
@@ -56,11 +65,11 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	var signals []domain.Signal
 
 	if userPresent {
-		if sig, ok := p.collectFocusSignal(snap); ok {
+		if sig, ok := p.collectFocusSignal(ctx, snap); ok {
 			signals = append(signals, sig)
 		}
 	}
-	signals = append(signals, p.collectAgentSignals(snap, userPresent)...)
+	signals = append(signals, p.collectAgentSignals(ctx, snap, userPresent)...)
 
 	if len(signals) == 0 {
 		return nil
@@ -103,8 +112,8 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	return nil
 }
 
-func (p *Pipeline) collectFocusSignal(snap *CacheSnapshot) (domain.Signal, bool) {
-	fm, err := p.bridge.Frontmost()
+func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot) (domain.Signal, bool) {
+	fm, err := p.bridge.Frontmost(ctx)
 	if err != nil {
 		if errors.Is(err, macos.ErrAccessibilityDenied) {
 			log.Printf("frontmost denied: %v", err)
@@ -122,9 +131,15 @@ func (p *Pipeline) collectFocusSignal(snap *CacheSnapshot) (domain.Signal, bool)
 	if !snap.AllowedBundles[fm.BundleID] {
 		return domain.Signal{}, false
 	}
-	title, err := p.bridge.FocusedWindowTitle()
+	title, err := p.bridge.FocusedWindowTitle(ctx)
 	if err != nil {
-		// Continue with empty title; bundle-only rules can still match.
+		// ErrAccessibilityDenied here means Automation works for Frontmost
+		// but not for window introspection. Surface it the same way so the
+		// user sees a non-"ok" state in Status. Continue with an empty
+		// title regardless — bundle-only rules can still match.
+		if errors.Is(err, macos.ErrAccessibilityDenied) && p.perm != nil {
+			p.perm.Set("accessibility_denied")
+		}
 		log.Printf("title: %v", err)
 		title = ""
 	}
@@ -135,7 +150,7 @@ func (p *Pipeline) collectFocusSignal(snap *CacheSnapshot) (domain.Signal, bool)
 	}, true
 }
 
-func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []domain.Signal {
+func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot, userPresent bool) []domain.Signal {
 	livePIDs := make(map[int]bool)
 	defer func() {
 		for pid := range p.prevCPU {
@@ -145,7 +160,7 @@ func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []
 		}
 	}()
 
-	procs, err := p.bridge.ListProcesses()
+	procs, err := p.bridge.ListProcesses(ctx)
 	if err != nil {
 		log.Printf("ps: %v", err)
 		return nil
@@ -168,11 +183,21 @@ func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []
 		if !seen {
 			continue
 		}
+		// Guard against PID reuse / counter reset: a uint64 subtraction wraps
+		// to a huge value when CPUTicks regresses, which would otherwise
+		// spuriously cross the threshold and inject a phantom signal.
+		if proc.CPUTicks < prev {
+			continue
+		}
 		if proc.CPUTicks-prev < threshold {
 			continue
 		}
-		cwd, err := p.bridge.ProcessCWD(proc.PID)
-		if err != nil || cwd == "" {
+		cwd, err := p.bridge.ProcessCWD(ctx, proc.PID)
+		if err != nil {
+			log.Printf("cwd pid=%d: %v", proc.PID, err)
+			continue
+		}
+		if cwd == "" {
 			continue
 		}
 		out = append(out, domain.Signal{

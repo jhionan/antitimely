@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +112,7 @@ func cmdUninstallLaunchAgent(args []string) int {
 			fmt.Fprintln(os.Stderr, "bootout (non-fatal):", err)
 		}
 	}
-	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(plistPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprintln(os.Stderr, "remove plist:", err)
 		return 1
 	}

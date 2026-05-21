@@ -221,9 +221,17 @@ func TestPipeline_AgentSignal_TaggedByRule(t *testing.T) {
 	}
 }
 
-func TestPipeline_IdleError_NoFocusSignal(t *testing.T) {
+func TestPipeline_IdleError_FailsOpen(t *testing.T) {
+	// When IdleSeconds returns an error the pipeline should fail open
+	// (treat the user as present) so focus tracking continues. The
+	// alternative ("treat as idle") silently flips the agent CPU threshold
+	// to a 20x stricter bar and drops focus signals entirely — a silent
+	// degradation. The error is logged + surfaced via the permission
+	// tracker so a human can investigate.
 	p, br, cache, db := newTestPipeline(t)
 	defer db.Close()
+	pt := NewPermissionTracker()
+	p.SetPermissionTracker(pt)
 	ctx := context.Background()
 
 	cache.Store(&CacheSnapshot{
@@ -231,8 +239,6 @@ func TestPipeline_IdleError_NoFocusSignal(t *testing.T) {
 	})
 	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
 	br.FocusedTitle = "some window"
-	// Simulate IdleSeconds returning an error — should treat user as idle,
-	// so no focus signal fires.
 	br.IdleErr = errors.New("boom")
 
 	if err := p.RunTick(ctx, 1000); err != nil {
@@ -243,8 +249,37 @@ func TestPipeline_IdleError_NoFocusSignal(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if n != 0 {
-		t.Errorf("expected 0 ticks when idle check fails, got %d", n)
+	if n != 1 {
+		t.Errorf("expected 1 tick (fail-open keeps tracking), got %d", n)
+	}
+	// The Frontmost call succeeded after the idle failure, so the focus
+	// signal handler overwrites permission state back to "ok" — exercising
+	// the recovery path. The important thing is that focus tracking ran
+	// at all.
+	if got := pt.Get(); got != "ok" {
+		t.Errorf("permission state = %q, want ok (post-success)", got)
+	}
+}
+
+func TestPipeline_IdleError_SurfacedWhenFrontmostFails(t *testing.T) {
+	// When idle fails AND the subsequent Frontmost call fails, the
+	// idle-failed state should remain visible. Catches the case where
+	// a regression silently re-overwrites the permission state.
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	pt := NewPermissionTracker()
+	p.SetPermissionTracker(pt)
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{})
+	br.IdleErr = errors.New("ioreg boom")
+	br.FrontmostErr = errors.New("appkit boom")
+
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+	if got := pt.Get(); got != "idle_detection_failed" {
+		t.Errorf("permission state = %q, want idle_detection_failed", got)
 	}
 }
 

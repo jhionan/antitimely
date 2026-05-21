@@ -15,8 +15,6 @@ import (
 var schemaSQL string
 
 func main() {
-	daemon.SetSchema(schemaSQL)
-
 	if len(os.Args) < 2 {
 		os.Exit(cli.Dispatch(nil))
 	}
@@ -51,7 +49,10 @@ func runDaemon(args []string) int {
 		"Minimum CPU centisecond delta per tick to count an agent as active when the USER is idle (default 100 = 20% of one core; default for active is 5)")
 	socket := fs.String("socket", cfg.SocketPath, "Unix socket path")
 	dbPath := fs.String("db", cfg.DBPath, "SQLite database path")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
 
 	cfg.IntervalSeconds = int(interval.Seconds())
 	if cfg.IntervalSeconds < 1 {
@@ -63,7 +64,7 @@ func runDaemon(args []string) int {
 	cfg.SocketPath = *socket
 	cfg.DBPath = *dbPath
 
-	if err := daemon.Run(cfg); err != nil {
+	if err := daemon.Run(cfg, schemaSQL); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

@@ -31,7 +31,10 @@ func cmdProject(args []string) int {
 func projectAdd(args []string) int {
 	fs := flag.NewFlagSet("project add", flag.ExitOnError)
 	company := fs.String("company", "", "Assign to a company (optional)")
-	fs.Parse(args) //nolint:errcheck
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: antitimely project add [--company=<name>] <name>")
 		return 64

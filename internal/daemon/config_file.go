@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -36,7 +38,7 @@ func DefaultConfigFilePath() (string, error) {
 func LoadFileConfig(path string) (FileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return FileConfig{}, nil
 		}
 		return FileConfig{}, fmt.Errorf("read %s: %w", path, err)
@@ -49,7 +51,7 @@ func LoadFileConfig(path string) (FileConfig, error) {
 }
 
 // ApplyTo merges non-empty values from fc into cfg in place. Returns an error
-// if a duration field can't be parsed.
+// if a duration field can't be parsed or a ~-prefixed path can't be expanded.
 func (fc FileConfig) ApplyTo(cfg *Config) error {
 	if fc.Interval != "" {
 		d, err := time.ParseDuration(fc.Interval)
@@ -78,25 +80,42 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 		cfg.AgentCPUThreshIdle = fc.AgentCPUThresholdIdle
 	}
 	if fc.SocketPath != "" {
-		cfg.SocketPath = expandHome(fc.SocketPath)
+		p, err := expandHome(fc.SocketPath)
+		if err != nil {
+			return fmt.Errorf("socket_path: %w", err)
+		}
+		cfg.SocketPath = p
 	}
 	if fc.DBPath != "" {
-		cfg.DBPath = expandHome(fc.DBPath)
+		p, err := expandHome(fc.DBPath)
+		if err != nil {
+			return fmt.Errorf("db_path: %w", err)
+		}
+		cfg.DBPath = p
 	}
 	if fc.PIDPath != "" {
-		cfg.PIDPath = expandHome(fc.PIDPath)
+		p, err := expandHome(fc.PIDPath)
+		if err != nil {
+			return fmt.Errorf("pid_path: %w", err)
+		}
+		cfg.PIDPath = p
 	}
 	return nil
 }
 
-func expandHome(p string) string {
+// expandHome resolves a leading "~" to the current user's home directory.
+// Returns an error if UserHomeDir fails — silently leaving the literal "~"
+// in the path would cause the daemon to create state directories named "~"
+// relative to its CWD, which is hard to debug.
+func expandHome(p string) (string, error) {
 	if len(p) > 0 && p[0] == '~' {
 		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, p[1:])
+		if err != nil {
+			return "", fmt.Errorf("expand %q: %w", p, err)
 		}
+		return filepath.Join(home, p[1:]), nil
 	}
-	return p
+	return p, nil
 }
 
 // DefaultConfigYAML returns a commented example config matching the current

@@ -1,10 +1,10 @@
 package macos
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
 )
 
@@ -13,6 +13,8 @@ import (
 // degraded.
 var ErrAccessibilityDenied = errors.New("macos: accessibility/automation permission denied")
 
+// Tab is used as the inter-field delimiter in AppleScript return values because
+// bundle IDs and app names can legitimately contain "|", but never a tab.
 const frontmostScript = `
 tell application "System Events"
 	set p to first application process whose frontmost is true
@@ -25,22 +27,24 @@ tell application "System Events"
 	end try
 	set pn to name of p
 	set pp to unix id of p
-	return bid & "|" & pn & "|" & (pp as string)
+	return bid & tab & pn & tab & (pp as string)
 end tell
 `
 
 // FrontmostReal returns the currently focused application's bundle id, name,
 // and pid.
-func FrontmostReal() (FrontmostInfo, error) {
-	out, err := runOsascript(frontmostScript)
+func FrontmostReal(ctx context.Context) (FrontmostInfo, error) {
+	out, err := runOsascript(ctx, frontmostScript)
 	if err != nil {
 		return FrontmostInfo{}, err
 	}
-	parts := strings.SplitN(strings.TrimSpace(out), "|", 3)
+	// Replace embedded newlines defensively in case an app name contains one.
+	clean := strings.ReplaceAll(strings.TrimSpace(out), "\n", " ")
+	parts := strings.SplitN(clean, "\t", 3)
 	if len(parts) != 3 {
 		return FrontmostInfo{}, fmt.Errorf("unexpected output: %q", out)
 	}
-	pid, err := strconv.Atoi(parts[2])
+	pid, err := parseInt(parts[2])
 	if err != nil {
 		return FrontmostInfo{}, fmt.Errorf("parse pid %q: %w", parts[2], err)
 	}
@@ -77,8 +81,8 @@ end tell
 // FocusedWindowTitleReal returns the title of the focused window, or "" if
 // the frontmost app has no window. Returns ErrAccessibilityDenied if the
 // Automation permission is denied.
-func FocusedWindowTitleReal() (string, error) {
-	out, err := runOsascript(titleScript)
+func FocusedWindowTitleReal(ctx context.Context) (string, error) {
+	out, err := runOsascript(ctx, titleScript)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +92,7 @@ func FocusedWindowTitleReal() (string, error) {
 // FocusedWindowDebugReal returns a multi-line report describing every window
 // of the frontmost process: index, name, AXTitle, AXRole, AXSubrole. Used
 // by 'atl debug windows' to diagnose title-detection issues.
-func FocusedWindowDebugReal() (string, error) {
+func FocusedWindowDebugReal(ctx context.Context) (string, error) {
 	const debugScript = `
 tell application "System Events"
 	set frontProc to first application process whose frontmost is true
@@ -132,24 +136,40 @@ tell application "System Events"
 	end try
 end tell
 `
-	out, err := runOsascript(debugScript)
+	out, err := runOsascript(ctx, debugScript)
 	if err != nil {
 		return "", err
 	}
 	return out, nil
 }
 
-func runOsascript(script string) (string, error) {
-	cmd := exec.Command("osascript", "-e", script)
+func runOsascript(ctx context.Context, script string) (string, error) {
+	cctx, cancel := withTimeout(ctx, osascriptDeadline)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "osascript", "-e", script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := string(out)
-		if strings.Contains(s, "not allowed assistive access") ||
-			strings.Contains(s, "not authorized") ||
-			strings.Contains(s, "(-1743)") {
+		// -1743 is the canonical AppleScript error code for "not authorized".
+		// Anchor on it first so non-English locales still get the typed sentinel;
+		// keep the English-string fallbacks as a secondary signal.
+		if strings.Contains(s, "(-1743)") ||
+			strings.Contains(s, "not allowed assistive access") ||
+			strings.Contains(s, "not authorized") {
 			return "", ErrAccessibilityDenied
 		}
 		return "", fmt.Errorf("osascript: %w (%s)", err, strings.TrimSpace(s))
 	}
 	return string(out), nil
+}
+
+func parseInt(s string) (int, error) {
+	var n int
+	for _, c := range strings.TrimSpace(s) {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("not an integer: %q", s)
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, nil
 }

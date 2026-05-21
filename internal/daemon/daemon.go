@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/rpc"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,8 +51,17 @@ func DefaultConfig() (Config, error) {
 	}, nil
 }
 
+// rpcConnDeadline bounds total time spent on a single accepted RPC connection.
+// CLI commands are one-shot (open → call → close) and finish in well under a
+// second, so a 30-second cap is generous; the goal is to make sure a stuck or
+// abandoned client cannot pin a goroutine + DB connection forever.
+const rpcConnDeadline = 30 * time.Second
+
 // Run boots the daemon and blocks until SIGINT/SIGTERM.
-func Run(cfg Config) error {
+func Run(cfg Config, schemaSQL string) error {
+	if schemaSQL == "" {
+		return errors.New("schema is empty")
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o700); err != nil {
 		return fmt.Errorf("mkdir state: %w", err)
 	}
@@ -60,14 +72,15 @@ func Run(cfg Config) error {
 	}
 	defer db.Close()
 
-	if err := applySchema(db); err != nil {
+	if _, err := db.Exec(schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
 
-	bridge := macos.RealBridge{}
+	bridge := &macos.RealBridge{}
 	cache := NewCache()
 	pt := NewPermissionTracker()
 	svc := &AntitimelyService{
+		DB:                  db,
 		Q:                   q,
 		Cache:               cache,
 		Bridge:              bridge,
@@ -87,7 +100,7 @@ func Run(cfg Config) error {
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 
-	listener, err := acquireSocket(cfg.SocketPath)
+	listener, err := acquireSocket(cfg.SocketPath, cfg.PIDPath)
 	if err != nil {
 		return err
 	}
@@ -113,6 +126,10 @@ func Run(cfg Config) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// Exponential backoff on transient Accept errors so EMFILE / similar
+		// don't put the loop into a tight printing spin.
+		backoff := 5 * time.Millisecond
+		const backoffMax = time.Second
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -120,8 +137,21 @@ func Run(cfg Config) error {
 					return
 				}
 				fmt.Fprintln(os.Stderr, "accept:", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < backoffMax {
+					backoff *= 2
+					if backoff > backoffMax {
+						backoff = backoffMax
+					}
+				}
 				continue
 			}
+			backoff = 5 * time.Millisecond
+			_ = conn.SetDeadline(time.Now().Add(rpcConnDeadline))
 			go srv.ServeConn(conn)
 		}
 	}()
@@ -143,10 +173,16 @@ func Run(cfg Config) error {
 		break
 	}
 	cancel()
-	_ = listener.Close()
+	if err := listener.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "listener close:", err)
+	}
 	wg.Wait()
-	_ = os.Remove(cfg.SocketPath)
-	_ = os.Remove(cfg.PIDPath)
+	if err := os.Remove(cfg.SocketPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintln(os.Stderr, "remove socket:", err)
+	}
+	if err := os.Remove(cfg.PIDPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintln(os.Stderr, "remove pid file:", err)
+	}
 	return nil
 }
 
@@ -156,27 +192,31 @@ func openDB(cfg Config) (*sql.DB, *store.Queries, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("open db: %w", err)
 	}
+	// Serialize all DB access. The pure-Go SQLite driver doesn't multiplex
+	// writers across connections — letting database/sql open more than one
+	// guarantees periodic SQLITE_BUSY under any concurrent RPC + poll load.
+	db.SetMaxOpenConns(1)
 	return db, store.New(db), nil
 }
 
-func applySchema(db *sql.DB) error {
-	if SchemaSQL == "" {
-		return fmt.Errorf("schema not loaded; call daemon.SetSchema first")
-	}
-	_, err := db.Exec(SchemaSQL)
-	return err
-}
-
-func acquireSocket(path string) (net.Listener, error) {
-	// If socket exists, attempt to connect; if a daemon answers, refuse to start.
+func acquireSocket(path, pidPath string) (net.Listener, error) {
 	if _, err := os.Stat(path); err == nil {
+		// Socket present. Try the PID file first — if it points to a live
+		// process, refuse to start. Only treat the socket as stale when we
+		// can prove nothing is listening (PID file missing/stale AND dial
+		// fails).
+		if running, pid := pidFileAlive(pidPath); running {
+			return nil, fmt.Errorf("another antitimely daemon is running (pid=%d, socket=%s)", pid, path)
+		}
 		c, err := net.DialTimeout("unix", path, 200*time.Millisecond)
 		if err == nil {
 			c.Close()
 			return nil, fmt.Errorf("another antitimely daemon is running on %s", path)
 		}
-		// Stale: remove it.
-		_ = os.Remove(path)
+		fmt.Fprintf(os.Stderr, "removing stale socket %s (pid file missing or dead)\n", path)
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("remove stale socket: %w", err)
+		}
 	}
 	l, err := net.Listen("unix", path)
 	if err != nil {
@@ -186,6 +226,27 @@ func acquireSocket(path string) (net.Listener, error) {
 		return nil, err
 	}
 	return l, nil
+}
+
+// pidFileAlive returns whether the PID file at path points to a live process.
+func pidFileAlive(path string) (bool, int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return false, 0
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false, 0
+	}
+	// Signal 0 doesn't deliver but returns an error if the process is gone.
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return false, pid
+	}
+	return true, pid
 }
 
 func writePIDFile(path string) error {

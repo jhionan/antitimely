@@ -32,7 +32,10 @@ func invoiceSend(args []string) int {
 	fs := flag.NewFlagSet("invoice send", flag.ExitOnError)
 	at := fs.String("at", "", "Backdate: YYYY-MM-DD or YYYY-MM-DD HH:MM (default: now)")
 	note := fs.String("note", "", "Optional note")
-	fs.Parse(args) //nolint:errcheck // ExitOnError
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: antitimely invoice send [--at=YYYY-MM-DD] [--note=...] <company>")
 		return 64
@@ -78,7 +81,10 @@ func invoiceSend(args []string) int {
 
 func invoiceList(args []string) int {
 	fs := flag.NewFlagSet("invoice list", flag.ExitOnError)
-	fs.Parse(args) //nolint:errcheck // ExitOnError
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
 	company := ""
 	if fs.NArg() == 1 {
 		company = fs.Arg(0)
