@@ -31,6 +31,7 @@ func RunMenu() int {
 		fmt.Println("  [4] Watch programs")
 		fmt.Println("  [5] Projects")
 		fmt.Println("  [6] Companies")
+		fmt.Println("  [N] Invoices")
 		fmt.Println("  [7] Rules")
 		fmt.Println("  [8] Config (init / show)")
 		fmt.Println("  [9] Reset (wipe data)")
@@ -54,6 +55,8 @@ func RunMenu() int {
 			projectMenu(stdin)
 		case "6":
 			companyMenu(stdin)
+		case "N", "n":
+			invoiceMenu(stdin)
 		case "7":
 			rulesMenu(stdin)
 		case "8":
@@ -201,6 +204,50 @@ func companyMenu(stdin *bufio.Scanner) {
 				continue
 			}
 			companyDelete([]string{name})
+		case "b", "":
+			return
+		default:
+			fmt.Println("  invalid choice")
+		}
+	}
+}
+
+func invoiceMenu(stdin *bufio.Scanner) {
+	for {
+		fmt.Println()
+		fmt.Println("Invoices:")
+		fmt.Println("  [1] List all invoices")
+		fmt.Println("  [2] Send invoice (record billing anchor)")
+		fmt.Println("  [3] Delete invoice")
+		fmt.Println("  [b] Back")
+		choice, ok := promptLine(stdin, "Choice: ")
+		if !ok {
+			return
+		}
+		switch choice {
+		case "1":
+			invoiceList(nil)
+		case "2":
+			company, ok := promptLine(stdin, "Company name: ")
+			if !ok || company == "" {
+				continue
+			}
+			at, _ := promptLine(stdin, "Date (YYYY-MM-DD, blank for now): ")
+			note, _ := promptLine(stdin, "Note (blank for none): ")
+			sendArgs := []string{company}
+			if at != "" {
+				sendArgs = append([]string{"--at=" + at}, sendArgs...)
+			}
+			if note != "" {
+				sendArgs = append([]string{"--note=" + note}, sendArgs...)
+			}
+			invoiceSend(sendArgs)
+		case "3":
+			idStr, ok := promptLine(stdin, "Invoice ID to delete: ")
+			if !ok || idStr == "" {
+				continue
+			}
+			invoiceDelete([]string{idStr})
 		case "b", "":
 			return
 		default:

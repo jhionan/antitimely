@@ -26,6 +26,29 @@ func (q *Queries) AddCompany(ctx context.Context, arg AddCompanyParams) (int64, 
 	return id, err
 }
 
+const addInvoice = `-- name: AddInvoice :one
+INSERT INTO invoices (company_id, sent_at, note, created_at) VALUES (?, ?, ?, ?) RETURNING id
+`
+
+type AddInvoiceParams struct {
+	CompanyID int64
+	SentAt    int64
+	Note      string
+	CreatedAt int64
+}
+
+func (q *Queries) AddInvoice(ctx context.Context, arg AddInvoiceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, addInvoice,
+		arg.CompanyID,
+		arg.SentAt,
+		arg.Note,
+		arg.CreatedAt,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const addProject = `-- name: AddProject :one
 INSERT INTO projects (name, company_id, created_at) VALUES (?, ?, ?) RETURNING id
 `
@@ -156,6 +179,15 @@ func (q *Queries) DeleteCompanyByName(ctx context.Context, name string) error {
 	return err
 }
 
+const deleteInvoice = `-- name: DeleteInvoice :exec
+DELETE FROM invoices WHERE id = ?
+`
+
+func (q *Queries) DeleteInvoice(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteInvoice, id)
+	return err
+}
+
 const deleteProjectByName = `-- name: DeleteProjectByName :exec
 DELETE FROM projects WHERE name = ?
 `
@@ -269,6 +301,81 @@ func (q *Queries) IsObservationIgnored(ctx context.Context, observationID int64)
 	return ignored, err
 }
 
+const lastInvoicePerCompany = `-- name: LastInvoicePerCompany :many
+SELECT company_id, MAX(sent_at) AS last_sent
+FROM invoices GROUP BY company_id
+`
+
+type LastInvoicePerCompanyRow struct {
+	CompanyID int64
+	LastSent  interface{}
+}
+
+func (q *Queries) LastInvoicePerCompany(ctx context.Context) ([]LastInvoicePerCompanyRow, error) {
+	rows, err := q.db.QueryContext(ctx, lastInvoicePerCompany)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LastInvoicePerCompanyRow{}
+	for rows.Next() {
+		var i LastInvoicePerCompanyRow
+		if err := rows.Scan(&i.CompanyID, &i.LastSent); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllInvoices = `-- name: ListAllInvoices :many
+SELECT i.id, c.name AS company_name, i.sent_at, i.note
+FROM invoices i
+JOIN companies c ON c.id = i.company_id
+ORDER BY i.sent_at DESC
+`
+
+type ListAllInvoicesRow struct {
+	ID          int64
+	CompanyName string
+	SentAt      int64
+	Note        string
+}
+
+func (q *Queries) ListAllInvoices(ctx context.Context) ([]ListAllInvoicesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAllInvoices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllInvoicesRow{}
+	for rows.Next() {
+		var i ListAllInvoicesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyName,
+			&i.SentAt,
+			&i.Note,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCompanies = `-- name: ListCompanies :many
 SELECT id, name FROM companies ORDER BY name
 `
@@ -288,6 +395,49 @@ func (q *Queries) ListCompanies(ctx context.Context) ([]ListCompaniesRow, error)
 	for rows.Next() {
 		var i ListCompaniesRow
 		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInvoicesByCompany = `-- name: ListInvoicesByCompany :many
+SELECT i.id, c.name AS company_name, i.sent_at, i.note
+FROM invoices i
+JOIN companies c ON c.id = i.company_id
+WHERE i.company_id = ?
+ORDER BY i.sent_at DESC
+`
+
+type ListInvoicesByCompanyRow struct {
+	ID          int64
+	CompanyName string
+	SentAt      int64
+	Note        string
+}
+
+func (q *Queries) ListInvoicesByCompany(ctx context.Context, companyID int64) ([]ListInvoicesByCompanyRow, error) {
+	rows, err := q.db.QueryContext(ctx, listInvoicesByCompany, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListInvoicesByCompanyRow{}
+	for rows.Next() {
+		var i ListInvoicesByCompanyRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyName,
+			&i.SentAt,
+			&i.Note,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -324,6 +474,48 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	for rows.Next() {
 		var i ListProjectsRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.CompanyName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectsWithCompany = `-- name: ListProjectsWithCompany :many
+SELECT p.id, p.name, p.company_id, c.name AS company_name
+FROM projects p
+LEFT JOIN companies c ON c.id = p.company_id
+ORDER BY c.name, p.name
+`
+
+type ListProjectsWithCompanyRow struct {
+	ID          int64
+	Name        string
+	CompanyID   sql.NullInt64
+	CompanyName sql.NullString
+}
+
+func (q *Queries) ListProjectsWithCompany(ctx context.Context) ([]ListProjectsWithCompanyRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectsWithCompany)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectsWithCompanyRow{}
+	for rows.Next() {
+		var i ListProjectsWithCompanyRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CompanyID,
+			&i.CompanyName,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -605,6 +797,54 @@ func (q *Queries) TotalsByProject(ctx context.Context, arg TotalsByProjectParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const totalsByProjectSince = `-- name: TotalsByProjectSince :many
+SELECT p.id AS project_id, p.name, COUNT(DISTINCT t.ts) AS tick_count
+FROM ticks t
+JOIN projects p ON p.id = t.project_id
+WHERE t.ts >= ?
+GROUP BY p.id
+`
+
+type TotalsByProjectSinceRow struct {
+	ProjectID int64
+	Name      string
+	TickCount int64
+}
+
+func (q *Queries) TotalsByProjectSince(ctx context.Context, ts int64) ([]TotalsByProjectSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, totalsByProjectSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TotalsByProjectSinceRow{}
+	for rows.Next() {
+		var i TotalsByProjectSinceRow
+		if err := rows.Scan(&i.ProjectID, &i.Name, &i.TickCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const unassignedTicksAllTime = `-- name: UnassignedTicksAllTime :one
+SELECT COUNT(DISTINCT ts) AS tick_count FROM ticks WHERE project_id IS NULL
+`
+
+func (q *Queries) UnassignedTicksAllTime(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, unassignedTicksAllTime)
+	var tick_count int64
+	err := row.Scan(&tick_count)
+	return tick_count, err
 }
 
 const unassignedTicksInRange = `-- name: UnassignedTicksInRange :one

@@ -67,3 +67,12 @@ CREATE TABLE IF NOT EXISTS ticks (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_ticks_project_ts ON ticks(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_ticks_unassigned ON ticks(observation_id) WHERE project_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS invoices (
+    id          INTEGER PRIMARY KEY,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    sent_at     INTEGER NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_invoices_company_sent ON invoices(company_id, sent_at DESC);

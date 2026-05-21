@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/rian/antitimely/internal/domain"
@@ -28,21 +29,24 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 	endOfDay := startOfDay + 86400
+	tickSec := int64(s.TickIntervalSeconds)
 
-	totals, err := s.Q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: startOfDay, Ts_2: endOfDay})
+	// --- Legacy fields ---
+
+	todayTotals, err := s.Q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: startOfDay, Ts_2: endOfDay})
 	if err != nil {
 		return err
 	}
-	reply.TodayTotalsSeconds = make(map[string]int64, len(totals))
-	for _, r := range totals {
-		reply.TodayTotalsSeconds[r.Name] = r.TickCount * int64(s.TickIntervalSeconds)
+	reply.TodayTotalsSeconds = make(map[string]int64, len(todayTotals))
+	for _, r := range todayTotals {
+		reply.TodayTotalsSeconds[r.Name] = r.TickCount * tickSec
 	}
 
-	unassigned, err := s.Q.UnassignedTicksInRange(ctx, store.UnassignedTicksInRangeParams{Ts: startOfDay, Ts_2: endOfDay})
+	unassignedToday, err := s.Q.UnassignedTicksInRange(ctx, store.UnassignedTicksInRangeParams{Ts: startOfDay, Ts_2: endOfDay})
 	if err != nil {
 		return err
 	}
-	reply.UnassignedTodaySeconds = unassigned * int64(s.TickIntervalSeconds)
+	reply.UnassignedTodaySeconds = unassignedToday * tickSec
 
 	pending, err := s.Q.CountPendingReviewSignatures(ctx)
 	if err != nil {
@@ -53,12 +57,150 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	idle, _ := s.Bridge.IdleSeconds()
 	reply.UserIdleSeconds = idle
 	reply.TickIntervalSeconds = s.TickIntervalSeconds
-
 	if s.PermissionState == "" {
 		reply.PermissionState = "ok"
 	} else {
 		reply.PermissionState = s.PermissionState
 	}
+
+	// --- New grouped fields ---
+
+	// Today's grand total (distinct tick timestamps across all projects).
+	var todayTotal int64
+	for _, r := range todayTotals {
+		todayTotal += r.TickCount
+	}
+	reply.TodayTotalSeconds = todayTotal * tickSec
+
+	// Last invoice timestamps per company_id.
+	lastInvoiceRows, err := s.Q.LastInvoicePerCompany(ctx)
+	if err != nil {
+		return err
+	}
+	lastInvoice := map[int64]int64{} // company_id -> unix ts
+	for _, r := range lastInvoiceRows {
+		if r.LastSent != nil {
+			switch v := r.LastSent.(type) {
+			case int64:
+				lastInvoice[r.CompanyID] = v
+			case int32:
+				lastInvoice[r.CompanyID] = int64(v)
+			}
+		}
+	}
+
+	// Projects with their company info.
+	projRows, err := s.Q.ListProjectsWithCompany(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Per-project today ticks (map project_id -> ticks).
+	// TotalsByProjectSince(startOfDay) has no upper bound, but since we're running this
+	// during "today", anything since startOfDay is today's ticks.
+	todayByProjectID := map[int64]int64{}
+	todaySinceRows, err := s.Q.TotalsByProjectSince(ctx, startOfDay)
+	if err != nil {
+		return err
+	}
+	for _, r := range todaySinceRows {
+		todayByProjectID[r.ProjectID] = r.TickCount
+	}
+
+	// Per-project billable ticks (since company's last invoice, or all-time).
+	// We need to call this per-project; since scale is small, do it simply.
+	// Build a set of unique "since" timestamps needed.
+	sinceNeeded := map[int64]bool{0: true}
+	for _, pr := range projRows {
+		if pr.CompanyID.Valid {
+			since := lastInvoice[pr.CompanyID.Int64]
+			sinceNeeded[since] = true
+		}
+	}
+	// Fetch billable per project for each since value.
+	billableByProjAndSince := map[int64]map[int64]int64{} // since -> project_id -> ticks
+	for since := range sinceNeeded {
+		rows, err := s.Q.TotalsByProjectSince(ctx, since)
+		if err != nil {
+			return err
+		}
+		m := map[int64]int64{}
+		for _, r := range rows {
+			m[r.ProjectID] = r.TickCount
+		}
+		billableByProjAndSince[since] = m
+	}
+
+	// Group projects under companies.
+	type compKey struct {
+		id   int64
+		name string
+	}
+	compMap := map[compKey]*rpcapi.CompanyTotals{}
+	var noCompany *rpcapi.CompanyTotals
+
+	for _, pr := range projRows {
+		since := int64(0)
+		lastInvUnix := int64(0)
+		if pr.CompanyID.Valid {
+			lastInvUnix = lastInvoice[pr.CompanyID.Int64]
+			since = lastInvUnix
+		}
+
+		billableTicks := billableByProjAndSince[since][pr.ID]
+		todayTicks := todayByProjectID[pr.ID]
+
+		pt := rpcapi.ProjectTotals{
+			Name:            pr.Name,
+			BillableSeconds: billableTicks * tickSec,
+			TodaySeconds:    todayTicks * tickSec,
+		}
+
+		if !pr.CompanyID.Valid {
+			if noCompany == nil {
+				noCompany = &rpcapi.CompanyTotals{Name: "(no company)"}
+			}
+			noCompany.Projects = append(noCompany.Projects, pt)
+			noCompany.BillableSeconds += pt.BillableSeconds
+			noCompany.TodaySeconds += pt.TodaySeconds
+		} else {
+			ck := compKey{id: pr.CompanyID.Int64, name: pr.CompanyName.String}
+			ct := compMap[ck]
+			if ct == nil {
+				ct = &rpcapi.CompanyTotals{
+					Name:            pr.CompanyName.String,
+					LastInvoiceUnix: lastInvUnix,
+				}
+				compMap[ck] = ct
+			}
+			ct.Projects = append(ct.Projects, pt)
+			ct.BillableSeconds += pt.BillableSeconds
+			ct.TodaySeconds += pt.TodaySeconds
+		}
+	}
+
+	// Sort companies by name.
+	compKeys := make([]compKey, 0, len(compMap))
+	for k := range compMap {
+		compKeys = append(compKeys, k)
+	}
+	sort.Slice(compKeys, func(i, j int) bool {
+		return compKeys[i].name < compKeys[j].name
+	})
+	for _, k := range compKeys {
+		reply.Companies = append(reply.Companies, *compMap[k])
+	}
+	if noCompany != nil {
+		reply.Companies = append(reply.Companies, *noCompany)
+	}
+
+	// Unassigned all-time.
+	unassignedAll, err := s.Q.UnassignedTicksAllTime(ctx)
+	if err != nil {
+		return err
+	}
+	reply.UnassignedBillableSeconds = unassignedAll * tickSec
+
 	return nil
 }
 
@@ -432,6 +574,67 @@ func (s *AntitimelyService) ProjectSetCompany(args rpcapi.ProjectSetCompanyArgs,
 		CompanyID: companyID,
 		Name:      args.ProjectName,
 	})
+}
+
+// InvoiceSend records that an invoice was sent to a company.
+func (s *AntitimelyService) InvoiceSend(args rpcapi.InvoiceSendArgs, reply *rpcapi.InvoiceSendReply) error {
+	ctx := context.Background()
+	c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
+	if err != nil {
+		return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
+	}
+	sentAt := args.SentAtUnix
+	if sentAt == 0 {
+		sentAt = time.Now().Unix()
+	}
+	id, err := s.Q.AddInvoice(ctx, store.AddInvoiceParams{
+		CompanyID: c.ID,
+		SentAt:    sentAt,
+		Note:      args.Note,
+		CreatedAt: time.Now().Unix(),
+	})
+	if err != nil {
+		return err
+	}
+	reply.ID = id
+	return nil
+}
+
+// InvoiceList returns invoices, optionally filtered to a single company.
+func (s *AntitimelyService) InvoiceList(args rpcapi.InvoiceListArgs, reply *rpcapi.InvoiceListReply) error {
+	ctx := context.Background()
+	if args.CompanyName == "" {
+		rows, err := s.Q.ListAllInvoices(ctx)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			reply.Items = append(reply.Items, rpcapi.InvoiceEntry{
+				ID: r.ID, CompanyName: r.CompanyName, SentAtUnix: r.SentAt, Note: r.Note,
+			})
+		}
+		return nil
+	}
+	c, err := s.Q.GetCompanyByName(ctx, args.CompanyName)
+	if err != nil {
+		return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
+	}
+	rows, err := s.Q.ListInvoicesByCompany(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		reply.Items = append(reply.Items, rpcapi.InvoiceEntry{
+			ID: r.ID, CompanyName: r.CompanyName, SentAtUnix: r.SentAt, Note: r.Note,
+		})
+	}
+	return nil
+}
+
+// InvoiceDelete removes an invoice by ID.
+func (s *AntitimelyService) InvoiceDelete(args rpcapi.InvoiceDeleteArgs, reply *rpcapi.InvoiceDeleteReply) error {
+	ctx := context.Background()
+	return s.Q.DeleteInvoice(ctx, args.ID)
 }
 
 // nullStr converts a non-empty string to a valid NullString; empty -> invalid.

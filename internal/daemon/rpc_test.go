@@ -268,3 +268,242 @@ func TestRPC_Report(t *testing.T) {
 		t.Errorf("Unassigned = %d, want 10", rep.Unassigned)
 	}
 }
+
+func TestRPC_InvoiceSendListDelete(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	// Create two companies.
+	coAID, _ := q.AddCompany(ctx, store.AddCompanyParams{Name: "Acme", CreatedAt: 1000})
+	coBID, _ := q.AddCompany(ctx, store.AddCompanyParams{Name: "BetaCorp", CreatedAt: 1000})
+
+	// Send an invoice for Acme.
+	var sendReply rpcapi.InvoiceSendReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceSend",
+		rpcapi.InvoiceSendArgs{CompanyName: "Acme", SentAtUnix: 2000, Note: "May invoice"},
+		&sendReply); err != nil {
+		t.Fatalf("InvoiceSend: %v", err)
+	}
+	if sendReply.ID == 0 {
+		t.Error("expected non-zero invoice id")
+	}
+
+	// Send another invoice for Acme.
+	var sendReply2 rpcapi.InvoiceSendReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceSend",
+		rpcapi.InvoiceSendArgs{CompanyName: "Acme", SentAtUnix: 3000, Note: "June invoice"},
+		&sendReply2); err != nil {
+		t.Fatalf("InvoiceSend #2: %v", err)
+	}
+
+	// Send invoice for BetaCorp.
+	var sendReply3 rpcapi.InvoiceSendReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceSend",
+		rpcapi.InvoiceSendArgs{CompanyName: "BetaCorp", SentAtUnix: 2500},
+		&sendReply3); err != nil {
+		t.Fatalf("InvoiceSend BetaCorp: %v", err)
+	}
+
+	// List all invoices.
+	var listAll rpcapi.InvoiceListReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{}, &listAll); err != nil {
+		t.Fatal(err)
+	}
+	if len(listAll.Items) != 3 {
+		t.Errorf("expected 3 invoices, got %d", len(listAll.Items))
+	}
+
+	// List Acme only.
+	var listAcme rpcapi.InvoiceListReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{CompanyName: "Acme"}, &listAcme); err != nil {
+		t.Fatal(err)
+	}
+	if len(listAcme.Items) != 2 {
+		t.Errorf("expected 2 Acme invoices, got %d", len(listAcme.Items))
+	}
+	// Should be ordered sent_at DESC, so June (3000) first.
+	if listAcme.Items[0].Note != "June invoice" {
+		t.Errorf("first item should be June invoice, got %q", listAcme.Items[0].Note)
+	}
+
+	// List unknown company returns error.
+	var listNone rpcapi.InvoiceListReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{CompanyName: "NoSuchCo"}, &listNone)
+	if err == nil {
+		t.Error("expected error for unknown company, got nil")
+	}
+
+	// Delete an invoice.
+	if err := client.Call(rpcapi.ServiceName+".InvoiceDelete",
+		rpcapi.InvoiceDeleteArgs{ID: sendReply.ID}, &rpcapi.InvoiceDeleteReply{}); err != nil {
+		t.Fatalf("InvoiceDelete: %v", err)
+	}
+
+	var listAfterDelete rpcapi.InvoiceListReply
+	_ = client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{CompanyName: "Acme"}, &listAfterDelete)
+	if len(listAfterDelete.Items) != 1 {
+		t.Errorf("expected 1 Acme invoice after delete, got %d", len(listAfterDelete.Items))
+	}
+
+	// Suppress "declared and not used" for coBID since it is only used implicitly.
+	_ = coAID
+	_ = coBID
+}
+
+func TestRPC_Status_CompanyGrouping(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	// Setup: 2 companies, 4 projects.
+	coAID, _ := q.AddCompany(ctx, store.AddCompanyParams{Name: "AlphaCo", CreatedAt: 1})
+	coBID, _ := q.AddCompany(ctx, store.AddCompanyParams{Name: "BetaCo", CreatedAt: 1})
+
+	p1ID, _ := q.AddProject(ctx, store.AddProjectParams{
+		Name: "alpha-p1", CompanyID: sql.NullInt64{Int64: coAID, Valid: true}, CreatedAt: 1,
+	})
+	p2ID, _ := q.AddProject(ctx, store.AddProjectParams{
+		Name: "alpha-p2", CompanyID: sql.NullInt64{Int64: coAID, Valid: true}, CreatedAt: 1,
+	})
+	p3ID, _ := q.AddProject(ctx, store.AddProjectParams{
+		Name: "beta-p1", CompanyID: sql.NullInt64{Int64: coBID, Valid: true}, CreatedAt: 1,
+	})
+	_ = p3ID
+
+	// p4 has no company.
+	p4ID, _ := q.AddProject(ctx, store.AddProjectParams{
+		Name: "orphan", CompanyID: sql.NullInt64{}, CreatedAt: 1,
+	})
+
+	// Single observation shared by all ticks (doesn't matter for totals).
+	obsID, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "test", FirstSeen: 1,
+	})
+
+	// Timestamps:
+	//   yesterday = now - 86400  (before the invoice anchor for AlphaCo)
+	//   today = now - 60         (within today's window)
+	now := int64(1748700000) // fixed fake "now" — we need ticks relative to startOfDay
+	// We can't easily control "now" inside the daemon, so instead use
+	// small absolute timestamps that will likely be "in the past" from the
+	// perspective of the daemon's startOfDay computation. The key thing we test
+	// is that after an invoice, only ticks after sentAt count as billable.
+
+	tsYesterday := int64(1000) // old ticks, before invoice anchor
+	tsToday := int64(2000)     // newer ticks, after invoice anchor
+	_ = now
+
+	// Ticks for alpha-p1: 3 old (pre-invoice) + 2 new (post-invoice).
+	for _, ts := range []int64{tsYesterday, tsYesterday + 5, tsYesterday + 10} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{
+			Ts: ts, ObservationID: obsID,
+			ProjectID: sql.NullInt64{Int64: p1ID, Valid: true},
+		})
+	}
+	for _, ts := range []int64{tsToday, tsToday + 5} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{
+			Ts: ts, ObservationID: obsID,
+			ProjectID: sql.NullInt64{Int64: p1ID, Valid: true},
+		})
+	}
+
+	// Ticks for alpha-p2: 1 old + 1 new.
+	_ = q.InsertTick(ctx, store.InsertTickParams{
+		Ts: tsYesterday + 1, ObservationID: obsID,
+		ProjectID: sql.NullInt64{Int64: p2ID, Valid: true},
+	})
+	_ = q.InsertTick(ctx, store.InsertTickParams{
+		Ts: tsToday + 1, ObservationID: obsID,
+		ProjectID: sql.NullInt64{Int64: p2ID, Valid: true},
+	})
+
+	// Ticks for orphan project (no company): 2 ticks.
+	for _, ts := range []int64{tsYesterday + 2, tsToday + 2} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{
+			Ts: ts, ObservationID: obsID,
+			ProjectID: sql.NullInt64{Int64: p4ID, Valid: true},
+		})
+	}
+
+	// Unassigned ticks: 2.
+	for _, ts := range []int64{tsYesterday + 3, tsToday + 3} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{
+			Ts: ts, ObservationID: obsID,
+		})
+	}
+
+	// Invoice for AlphaCo sent at sentAt = tsToday - 1 (so only ticks >= tsToday count as billable).
+	sentAt := tsToday - 1
+	_, err := q.AddInvoice(ctx, store.AddInvoiceParams{
+		CompanyID: coAID, SentAt: sentAt, Note: "test", CreatedAt: sentAt,
+	})
+	if err != nil {
+		t.Fatalf("AddInvoice: %v", err)
+	}
+
+	// Call Status.
+	var reply rpcapi.StatusReply
+	if err := client.Call(rpcapi.ServiceName+".Status", rpcapi.StatusArgs{}, &reply); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	// Find AlphaCo in the reply.
+	var alphaCo *rpcapi.CompanyTotals
+	for i := range reply.Companies {
+		if reply.Companies[i].Name == "AlphaCo" {
+			alphaCo = &reply.Companies[i]
+			break
+		}
+	}
+	if alphaCo == nil {
+		t.Fatalf("AlphaCo not found in Companies; got: %+v", reply.Companies)
+	}
+
+	// AlphaCo invoice anchor = sentAt; billable = ticks with ts >= sentAt.
+	// alpha-p1: tsToday (2000) and tsToday+5 (2005) -> 2 ticks * 5s = 10s
+	// alpha-p2: tsToday+1 (2001) -> 1 tick * 5s = 5s
+	// Total billable for AlphaCo = 15s.
+	if alphaCo.BillableSeconds != 15 {
+		t.Errorf("AlphaCo billable = %d, want 15", alphaCo.BillableSeconds)
+	}
+	if alphaCo.LastInvoiceUnix != sentAt {
+		t.Errorf("AlphaCo LastInvoiceUnix = %d, want %d", alphaCo.LastInvoiceUnix, sentAt)
+	}
+
+	// Find BetaCo — no invoice, so billable = all ticks for its projects.
+	// beta-p1 has no ticks in our setup, billable = 0.
+	var betaCo *rpcapi.CompanyTotals
+	for i := range reply.Companies {
+		if reply.Companies[i].Name == "BetaCo" {
+			betaCo = &reply.Companies[i]
+			break
+		}
+	}
+	if betaCo == nil {
+		t.Fatalf("BetaCo not found in Companies; got: %+v", reply.Companies)
+	}
+	if betaCo.LastInvoiceUnix != 0 {
+		t.Errorf("BetaCo LastInvoiceUnix = %d, want 0", betaCo.LastInvoiceUnix)
+	}
+
+	// Unassigned all-time = 2 ticks * 5s = 10s.
+	if reply.UnassignedBillableSeconds != 10 {
+		t.Errorf("UnassignedBillableSeconds = %d, want 10", reply.UnassignedBillableSeconds)
+	}
+
+	// Companies should be ordered alphabetically: AlphaCo, BetaCo, then (no company) last.
+	if len(reply.Companies) < 2 {
+		t.Fatalf("expected at least 2 companies, got %d", len(reply.Companies))
+	}
+	if reply.Companies[0].Name != "AlphaCo" {
+		t.Errorf("Companies[0].Name = %q, want AlphaCo", reply.Companies[0].Name)
+	}
+	if reply.Companies[1].Name != "BetaCo" {
+		t.Errorf("Companies[1].Name = %q, want BetaCo", reply.Companies[1].Name)
+	}
+}

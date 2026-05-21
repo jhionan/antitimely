@@ -19,6 +19,14 @@ type IgnoredObservation struct {
 	IgnoredAt     int64
 }
 
+type Invoice struct {
+	ID        int64
+	CompanyID int64
+	SentAt    int64
+	Note      string
+	CreatedAt int64
+}
+
 type Observation struct {
 	ID          int64
 	Source      string

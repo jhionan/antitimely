@@ -24,6 +24,8 @@ func Dispatch(args []string) int {
 		return cmdWatch(args[1:])
 	case "company":
 		return cmdCompany(args[1:])
+	case "invoice":
+		return cmdInvoice(args[1:])
 	case "project":
 		return cmdProject(args[1:])
 	case "review":
@@ -55,6 +57,7 @@ Usage:
   antitimely status
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
   antitimely company  add <name>  |  list  |  delete <name>
+  antitimely invoice  send [--at=YYYY-MM-DD] [--note=...] <company>  |  list [<company>]  |  delete <id>
   antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]
   antitimely review
   antitimely rules    list  |  delete <id>

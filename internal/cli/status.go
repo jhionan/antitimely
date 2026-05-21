@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/rian/antitimely/internal/rpcapi"
@@ -28,31 +27,88 @@ func cmdStatus(args []string) int {
 		return 1
 	}
 
-	fmt.Printf("Idle: %s\n", time.Duration(reply.UserIdleSeconds)*time.Second)
-	fmt.Printf("Tick interval: %ds\n", reply.TickIntervalSeconds)
-	fmt.Printf("Permission: %s\n", reply.PermissionState)
+	// Header line.
+	fmt.Printf("Idle: %s   |   Tick: %ds   |   Permission: %s\n",
+		fmtDuration(int64(reply.UserIdleSeconds)),
+		reply.TickIntervalSeconds,
+		reply.PermissionState,
+	)
 	if reply.PermissionState == "accessibility_denied" {
 		fmt.Fprintln(os.Stderr,
-			"  ⚠ Window-title capture disabled. Enable in System Settings → Privacy & Security → Automation → antitimely → System Events.")
+			"  Warning: Window-title capture disabled. Enable in System Settings -> Privacy & Security -> Automation -> antitimely -> System Events.")
 	}
 	fmt.Println()
-	fmt.Println("Today:")
-	if len(reply.TodayTotalsSeconds) == 0 {
-		fmt.Println("  (no project time tracked yet)")
-	} else {
-		names := make([]string, 0, len(reply.TodayTotalsSeconds))
-		for k := range reply.TodayTotalsSeconds {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		for _, n := range names {
-			fmt.Printf("  %-30s %s\n", n, time.Duration(reply.TodayTotalsSeconds[n])*time.Second)
-		}
+
+	// Today total.
+	fmt.Printf("Today: %s total tracked\n", fmtDuration(reply.TodayTotalSeconds))
+	fmt.Println()
+
+	// Grouped companies block.
+	if len(reply.Companies) == 0 && reply.UnassignedBillableSeconds == 0 {
+		fmt.Println("(no time tracked yet)")
+		return 0
 	}
-	if reply.UnassignedTodaySeconds > 0 {
-		fmt.Printf("  %-30s %s  (%d signatures, run `antitimely review`)\n",
-			"(unassigned)", time.Duration(reply.UnassignedTodaySeconds)*time.Second,
-			reply.UnassignedSignaturesCount)
+
+	fmt.Println("Billable (since last invoice per company):")
+	fmt.Println()
+
+	for _, co := range reply.Companies {
+		if co.Name == "(no company)" {
+			// Render under unassigned at end.
+			continue
+		}
+		since := "never"
+		if co.LastInvoiceUnix != 0 {
+			since = time.Unix(co.LastInvoiceUnix, 0).Local().Format("2006-01-02 15:04")
+		}
+		fmt.Printf("  %-38s %s   (since: %s)\n", co.Name, fmtDuration(co.BillableSeconds), since)
+		for _, pr := range co.Projects {
+			fmt.Printf("    %-36s %s   (today: %s)\n",
+				pr.Name,
+				fmtDuration(pr.BillableSeconds),
+				fmtDuration(pr.TodaySeconds),
+			)
+		}
+		fmt.Println()
 	}
+
+	// No-company projects.
+	for _, co := range reply.Companies {
+		if co.Name != "(no company)" {
+			continue
+		}
+		fmt.Printf("  %-38s %s\n", "(no company)", fmtDuration(co.BillableSeconds))
+		for _, pr := range co.Projects {
+			fmt.Printf("    %-36s %s   (today: %s)\n",
+				pr.Name,
+				fmtDuration(pr.BillableSeconds),
+				fmtDuration(pr.TodaySeconds),
+			)
+		}
+		fmt.Println()
+	}
+
+	// Unassigned bucket.
+	if reply.UnassignedBillableSeconds > 0 || reply.UnassignedTodaySeconds > 0 {
+		sigNote := ""
+		if reply.UnassignedSignaturesCount > 0 {
+			sigNote = fmt.Sprintf(", %d signature(s), run `antitimely review`", reply.UnassignedSignaturesCount)
+		}
+		fmt.Printf("  %-38s %s   (today: %s%s)\n",
+			"(unassigned)",
+			fmtDuration(reply.UnassignedBillableSeconds),
+			fmtDuration(reply.UnassignedTodaySeconds),
+			sigNote,
+		)
+	}
+
 	return 0
+}
+
+// fmtDuration formats a duration in seconds as "1h2m3s", or "0s" for zero.
+func fmtDuration(seconds int64) string {
+	if seconds <= 0 {
+		return "0s"
+	}
+	return time.Duration(seconds * int64(time.Second)).String()
 }

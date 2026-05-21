@@ -127,3 +127,42 @@ DELETE FROM companies WHERE name = ?;
 
 -- name: SetProjectCompany :exec
 UPDATE projects SET company_id = ? WHERE name = ?;
+
+-- name: ListProjectsWithCompany :many
+SELECT p.id, p.name, p.company_id, c.name AS company_name
+FROM projects p
+LEFT JOIN companies c ON c.id = p.company_id
+ORDER BY c.name, p.name;
+
+-- name: AddInvoice :one
+INSERT INTO invoices (company_id, sent_at, note, created_at) VALUES (?, ?, ?, ?) RETURNING id;
+
+-- name: ListInvoicesByCompany :many
+SELECT i.id, c.name AS company_name, i.sent_at, i.note
+FROM invoices i
+JOIN companies c ON c.id = i.company_id
+WHERE i.company_id = ?
+ORDER BY i.sent_at DESC;
+
+-- name: ListAllInvoices :many
+SELECT i.id, c.name AS company_name, i.sent_at, i.note
+FROM invoices i
+JOIN companies c ON c.id = i.company_id
+ORDER BY i.sent_at DESC;
+
+-- name: DeleteInvoice :exec
+DELETE FROM invoices WHERE id = ?;
+
+-- name: LastInvoicePerCompany :many
+SELECT company_id, MAX(sent_at) AS last_sent
+FROM invoices GROUP BY company_id;
+
+-- name: UnassignedTicksAllTime :one
+SELECT COUNT(DISTINCT ts) AS tick_count FROM ticks WHERE project_id IS NULL;
+
+-- name: TotalsByProjectSince :many
+SELECT p.id AS project_id, p.name, COUNT(DISTINCT t.ts) AS tick_count
+FROM ticks t
+JOIN projects p ON p.id = t.project_id
+WHERE t.ts >= ?
+GROUP BY p.id;

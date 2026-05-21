@@ -9,6 +9,7 @@ const ServiceName = "Antitimely"
 type StatusArgs struct{}
 
 type StatusReply struct {
+	// Legacy fields kept for backward compatibility:
 	ActiveProjects            []string
 	TodayTotalsSeconds        map[string]int64
 	UnassignedTodaySeconds    int64
@@ -16,7 +17,49 @@ type StatusReply struct {
 	UserIdleSeconds           int
 	TickIntervalSeconds       int
 	PermissionState           string // "ok" | "accessibility_denied" | "unknown"
+
+	// New grouped fields:
+	TodayTotalSeconds         int64          // sum of all project ticks today (distinct ts)
+	Companies                 []CompanyTotals // ordered by company name; unassigned last
+	UnassignedBillableSeconds int64          // all-time unassigned ticks in seconds
 }
+
+type CompanyTotals struct {
+	Name            string
+	LastInvoiceUnix int64 // 0 if no invoices
+	BillableSeconds int64 // sum of projects' billable seconds (since last invoice, or all-time if none)
+	TodaySeconds    int64 // sum of projects' today seconds
+	Projects        []ProjectTotals
+}
+
+type ProjectTotals struct {
+	Name            string
+	BillableSeconds int64 // since company's last invoice (or all-time if no invoice)
+	TodaySeconds    int64
+}
+
+// --- Invoices ---
+
+type InvoiceSendArgs struct {
+	CompanyName string
+	SentAtUnix  int64  // 0 = use server's "now"
+	Note        string
+}
+type InvoiceSendReply struct{ ID int64 }
+
+type InvoiceListArgs struct {
+	CompanyName string // empty = list all
+}
+type InvoiceListReply struct{ Items []InvoiceEntry }
+type InvoiceEntry struct {
+	ID          int64
+	CompanyName string
+	SentAtUnix  int64
+	Note        string
+}
+
+type InvoiceDeleteArgs struct{ ID int64 }
+type InvoiceDeleteReply struct{}
 
 // --- Allowlist ---
 
