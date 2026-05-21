@@ -10,9 +10,10 @@ import (
 // that the polling loop reads on each tick. Swapped atomically by mutation
 // RPC handlers.
 type CacheSnapshot struct {
-	AllowedBundles  map[string]bool
-	AllowedBinaries map[string]bool
-	Rules           []domain.RuleSpec
+	AllowedBundles   map[string]bool
+	AllowedBinaries  map[string]bool
+	Rules            []domain.RuleSpec
+	PausedProjectIDs map[int64]bool // project_id -> paused
 }
 
 // Cache holds the current snapshot with lock-free read access.
@@ -24,9 +25,10 @@ type Cache struct {
 func NewCache() *Cache {
 	c := &Cache{}
 	c.ptr.Store(&CacheSnapshot{
-		AllowedBundles:  map[string]bool{},
-		AllowedBinaries: map[string]bool{},
-		Rules:           nil,
+		AllowedBundles:   map[string]bool{},
+		AllowedBinaries:  map[string]bool{},
+		Rules:            nil,
+		PausedProjectIDs: map[int64]bool{},
 	})
 	return c
 }

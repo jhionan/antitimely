@@ -64,10 +64,15 @@ func cmdStatus(args []string) int {
 		}
 		fmt.Printf("  %-38s %s   (since: %s)\n", co.Name, fmtDuration(co.BillableSeconds), since)
 		for _, pr := range co.Projects {
-			fmt.Printf("    %-36s %s   (today: %s)\n",
+			pausedNote := ""
+			if pr.Paused {
+				pausedNote = "  (paused)"
+			}
+			fmt.Printf("    %-36s %s   (today: %s)%s\n",
 				pr.Name,
 				fmtDuration(pr.BillableSeconds),
 				fmtDuration(pr.TodaySeconds),
+				pausedNote,
 			)
 		}
 		fmt.Println()
@@ -80,10 +85,15 @@ func cmdStatus(args []string) int {
 		}
 		fmt.Printf("  %-38s %s\n", "(no company)", fmtDuration(co.BillableSeconds))
 		for _, pr := range co.Projects {
-			fmt.Printf("    %-36s %s   (today: %s)\n",
+			pausedNote := ""
+			if pr.Paused {
+				pausedNote = "  (paused)"
+			}
+			fmt.Printf("    %-36s %s   (today: %s)%s\n",
 				pr.Name,
 				fmtDuration(pr.BillableSeconds),
 				fmtDuration(pr.TodaySeconds),
+				pausedNote,
 			)
 		}
 		fmt.Println()

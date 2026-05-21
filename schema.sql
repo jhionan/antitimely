@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS projects (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
     company_id  INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    paused      INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL
 ) STRICT;
 

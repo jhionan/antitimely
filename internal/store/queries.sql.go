@@ -473,8 +473,35 @@ func (q *Queries) ListInvoicesByCompany(ctx context.Context, companyID int64) ([
 	return items, nil
 }
 
+const listPausedProjectIDs = `-- name: ListPausedProjectIDs :many
+SELECT id FROM projects WHERE paused = 1
+`
+
+func (q *Queries) ListPausedProjectIDs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listPausedProjectIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
-SELECT p.id, p.name, c.name AS company_name
+SELECT p.id, p.name, p.paused, c.name AS company_name
 FROM projects p
 LEFT JOIN companies c ON c.id = p.company_id
 ORDER BY p.name
@@ -483,6 +510,7 @@ ORDER BY p.name
 type ListProjectsRow struct {
 	ID          int64
 	Name        string
+	Paused      int64
 	CompanyName sql.NullString
 }
 
@@ -495,7 +523,12 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	items := []ListProjectsRow{}
 	for rows.Next() {
 		var i ListProjectsRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.CompanyName); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Paused,
+			&i.CompanyName,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -510,7 +543,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 }
 
 const listProjectsWithCompany = `-- name: ListProjectsWithCompany :many
-SELECT p.id, p.name, p.company_id, c.name AS company_name
+SELECT p.id, p.name, p.company_id, p.paused, c.name AS company_name
 FROM projects p
 LEFT JOIN companies c ON c.id = p.company_id
 ORDER BY c.name, p.name
@@ -520,6 +553,7 @@ type ListProjectsWithCompanyRow struct {
 	ID          int64
 	Name        string
 	CompanyID   sql.NullInt64
+	Paused      int64
 	CompanyName sql.NullString
 }
 
@@ -536,6 +570,7 @@ func (q *Queries) ListProjectsWithCompany(ctx context.Context) ([]ListProjectsWi
 			&i.ID,
 			&i.Name,
 			&i.CompanyID,
+			&i.Paused,
 			&i.CompanyName,
 		); err != nil {
 			return nil, err
@@ -777,6 +812,20 @@ type SetProjectCompanyParams struct {
 
 func (q *Queries) SetProjectCompany(ctx context.Context, arg SetProjectCompanyParams) error {
 	_, err := q.db.ExecContext(ctx, setProjectCompany, arg.CompanyID, arg.Name)
+	return err
+}
+
+const setProjectPaused = `-- name: SetProjectPaused :exec
+UPDATE projects SET paused = ? WHERE name = ?
+`
+
+type SetProjectPausedParams struct {
+	Paused int64
+	Name   string
+}
+
+func (q *Queries) SetProjectPaused(ctx context.Context, arg SetProjectPausedParams) error {
+	_, err := q.db.ExecContext(ctx, setProjectPaused, arg.Paused, arg.Name)
 	return err
 }
 

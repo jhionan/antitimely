@@ -188,11 +188,13 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 
 		billableTicks := billableByProjAndSince[since][pr.ID]
 		todayTicks := todayByProjectID[pr.ID]
+		isPaused := pr.Paused != 0
 
 		pt := rpcapi.ProjectTotals{
 			Name:            pr.Name,
 			BillableSeconds: billableTicks * tickSec,
 			TodaySeconds:    todayTicks * tickSec,
+			Paused:          isPaused,
 		}
 
 		if !pr.CompanyID.Valid {
@@ -200,8 +202,10 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 				noCompany = &rpcapi.CompanyTotals{Name: "(no company)"}
 			}
 			noCompany.Projects = append(noCompany.Projects, pt)
-			noCompany.BillableSeconds += pt.BillableSeconds
-			noCompany.TodaySeconds += pt.TodaySeconds
+			if !isPaused {
+				noCompany.BillableSeconds += pt.BillableSeconds
+				noCompany.TodaySeconds += pt.TodaySeconds
+			}
 		} else {
 			ck := compKey{id: pr.CompanyID.Int64, name: pr.CompanyName.String}
 			ct := compMap[ck]
@@ -213,8 +217,10 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 				compMap[ck] = ct
 			}
 			ct.Projects = append(ct.Projects, pt)
-			ct.BillableSeconds += pt.BillableSeconds
-			ct.TodaySeconds += pt.TodaySeconds
+			if !isPaused {
+				ct.BillableSeconds += pt.BillableSeconds
+				ct.TodaySeconds += pt.TodaySeconds
+			}
 		}
 	}
 
@@ -291,6 +297,14 @@ func (s *AntitimelyService) ReloadCache() error {
 			spec.MatchCwdPrefix = &v
 		}
 		snap.Rules = append(snap.Rules, spec)
+	}
+	pausedIDs, err := s.Q.ListPausedProjectIDs(ctx)
+	if err != nil {
+		return err
+	}
+	snap.PausedProjectIDs = make(map[int64]bool, len(pausedIDs))
+	for _, id := range pausedIDs {
+		snap.PausedProjectIDs[id] = true
 	}
 	s.Cache.Store(snap)
 	return nil
@@ -378,6 +392,7 @@ func (s *AntitimelyService) ProjectList(args rpcapi.ProjectListArgs, reply *rpca
 			ID:          r.ID,
 			Name:        r.Name,
 			CompanyName: r.CompanyName.String, // zero value of NullString is ""
+			Paused:      r.Paused != 0,
 		})
 	}
 	return nil
@@ -388,6 +403,34 @@ func (s *AntitimelyService) ProjectDelete(args rpcapi.ProjectDeleteArgs, reply *
 	ctx, cancel := handlerCtx()
 	defer cancel()
 	if err := s.Q.DeleteProjectByName(ctx, args.Name); err != nil {
+		return err
+	}
+	return s.ReloadCache()
+}
+
+// ProjectPause marks a project as paused so the pipeline does not credit it
+// any ticks even when its rules match. Calling pause on an already-paused
+// project is a no-op success.
+func (s *AntitimelyService) ProjectPause(args rpcapi.ProjectPauseArgs, reply *rpcapi.ProjectPauseReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	if err := s.Q.SetProjectPaused(ctx, store.SetProjectPausedParams{
+		Paused: 1, Name: args.Name,
+	}); err != nil {
+		return err
+	}
+	return s.ReloadCache()
+}
+
+// ProjectResume clears the paused flag on a project so the pipeline resumes
+// crediting ticks. Calling resume on an already-active project is a no-op
+// success.
+func (s *AntitimelyService) ProjectResume(args rpcapi.ProjectResumeArgs, reply *rpcapi.ProjectResumeReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	if err := s.Q.SetProjectPaused(ctx, store.SetProjectPausedParams{
+		Paused: 0, Name: args.Name,
+	}); err != nil {
 		return err
 	}
 	return s.ReloadCache()

@@ -62,7 +62,7 @@ Usage:
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
   antitimely company  add <name>  |  list  |  delete <name>
   antitimely invoice  send [--at=YYYY-MM-DD] [--note=...] <company>  |  list [<company>]  |  delete <id>
-  antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]
+  antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]  |  pause <name>  |  resume <name>
   antitimely review
   antitimely rules    list  |  delete <id>
   antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]

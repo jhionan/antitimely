@@ -75,6 +75,12 @@ func Run(cfg Config, schemaSQL string) error {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	// Idempotent column add for older DBs that predate the paused feature.
+	if _, err := db.Exec("ALTER TABLE projects ADD COLUMN paused INTEGER NOT NULL DEFAULT 0"); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migrate projects.paused: %w", err)
+		}
+	}
 
 	bridge := &macos.RealBridge{}
 	cache := NewCache()

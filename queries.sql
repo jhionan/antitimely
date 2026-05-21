@@ -57,7 +57,7 @@ INSERT INTO projects (name, company_id, created_at) VALUES (?, ?, ?) RETURNING i
 SELECT id, name FROM projects WHERE name = ?;
 
 -- name: ListProjects :many
-SELECT p.id, p.name, c.name AS company_name
+SELECT p.id, p.name, p.paused, c.name AS company_name
 FROM projects p
 LEFT JOIN companies c ON c.id = p.company_id
 ORDER BY p.name;
@@ -129,10 +129,16 @@ DELETE FROM companies WHERE name = ?;
 UPDATE projects SET company_id = ? WHERE name = ?;
 
 -- name: ListProjectsWithCompany :many
-SELECT p.id, p.name, p.company_id, c.name AS company_name
+SELECT p.id, p.name, p.company_id, p.paused, c.name AS company_name
 FROM projects p
 LEFT JOIN companies c ON c.id = p.company_id
 ORDER BY c.name, p.name;
+
+-- name: ListPausedProjectIDs :many
+SELECT id FROM projects WHERE paused = 1;
+
+-- name: SetProjectPaused :exec
+UPDATE projects SET paused = ? WHERE name = ?;
 
 -- name: AddInvoice :one
 INSERT INTO invoices (company_id, sent_at, note, created_at) VALUES (?, ?, ?, ?) RETURNING id;

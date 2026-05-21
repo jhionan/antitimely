@@ -41,6 +41,7 @@ type Project struct {
 	ID        int64
 	Name      string
 	CompanyID sql.NullInt64
+	Paused    int64
 	CreatedAt int64
 }
 

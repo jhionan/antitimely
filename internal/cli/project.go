@@ -10,7 +10,7 @@ import (
 
 func cmdProject(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely project <add|list|delete|set-company> ...")
+		fmt.Fprintln(os.Stderr, "usage: antitimely project <add|list|delete|set-company|pause|resume> ...")
 		return 64
 	}
 	switch args[0] {
@@ -22,6 +22,10 @@ func cmdProject(args []string) int {
 		return projectDelete(args[1:])
 	case "set-company":
 		return projectSetCompany(args[1:])
+	case "pause":
+		return projectPause(args[1:])
+	case "resume":
+		return projectResume(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: project %s\n", args[0])
 		return 64
@@ -73,13 +77,17 @@ func projectList() int {
 		fmt.Println("(no projects)")
 		return 0
 	}
-	fmt.Printf("%4s  %-30s %s\n", "ID", "NAME", "COMPANY")
+	fmt.Printf("%4s  %-30s %-20s %s\n", "ID", "NAME", "COMPANY", "STATUS")
 	for _, p := range reply.Items {
 		company := p.CompanyName
 		if company == "" {
 			company = "—"
 		}
-		fmt.Printf("%4d  %-30s %s\n", p.ID, p.Name, company)
+		status := "active"
+		if p.Paused {
+			status = "PAUSED"
+		}
+		fmt.Printf("%4d  %-30s %-20s %s\n", p.ID, p.Name, company, status)
 	}
 	return 0
 }
@@ -129,5 +137,45 @@ func projectSetCompany(args []string) int {
 	} else {
 		fmt.Printf("Assigned project %q to company %q\n", projectName, companyName)
 	}
+	return 0
+}
+
+func projectPause(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely project pause <name>")
+		return 64
+	}
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	if err := client.Call(rpcapi.ServiceName+".ProjectPause",
+		rpcapi.ProjectPauseArgs{Name: args[0]},
+		&rpcapi.ProjectPauseReply{}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Paused project %q\n", args[0])
+	return 0
+}
+
+func projectResume(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely project resume <name>")
+		return 64
+	}
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	if err := client.Call(rpcapi.ServiceName+".ProjectResume",
+		rpcapi.ProjectResumeArgs{Name: args[0]},
+		&rpcapi.ProjectResumeReply{}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Resumed project %q\n", args[0])
 	return 0
 }

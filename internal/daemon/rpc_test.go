@@ -508,3 +508,74 @@ func TestRPC_Status_CompanyGrouping(t *testing.T) {
 		t.Errorf("Companies[1].Name = %q, want BetaCo", reply.Companies[1].Name)
 	}
 }
+
+func TestRPC_ProjectPauseResume(t *testing.T) {
+	client, _, cache := setupRPCServer(t)
+
+	// Create a project.
+	if err := client.Call(rpcapi.ServiceName+".ProjectAdd",
+		rpcapi.ProjectAddArgs{Name: "test-pause"}, &rpcapi.ProjectAddReply{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pause it.
+	if err := client.Call(rpcapi.ServiceName+".ProjectPause",
+		rpcapi.ProjectPauseArgs{Name: "test-pause"}, &rpcapi.ProjectPauseReply{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify ProjectList shows it as paused, and capture its ID.
+	var list rpcapi.ProjectListReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectList", rpcapi.ProjectListArgs{}, &list); err != nil {
+		t.Fatal(err)
+	}
+	var projID int64
+	var found bool
+	for _, p := range list.Items {
+		if p.Name == "test-pause" {
+			found = true
+			projID = p.ID
+			if !p.Paused {
+				t.Errorf("expected paused=true after ProjectPause, got false")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("project test-pause not found in list")
+	}
+
+	// Verify cache reflects the paused project.
+	snap := cache.Snapshot()
+	if !snap.PausedProjectIDs[projID] {
+		t.Errorf("cache.PausedProjectIDs[%d] = false, want true", projID)
+	}
+
+	// Calling pause again on an already-paused project should be a no-op success.
+	if err := client.Call(rpcapi.ServiceName+".ProjectPause",
+		rpcapi.ProjectPauseArgs{Name: "test-pause"}, &rpcapi.ProjectPauseReply{}); err != nil {
+		t.Errorf("second pause should be no-op: %v", err)
+	}
+
+	// Resume it.
+	if err := client.Call(rpcapi.ServiceName+".ProjectResume",
+		rpcapi.ProjectResumeArgs{Name: "test-pause"}, &rpcapi.ProjectResumeReply{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify ProjectList shows it as active.
+	var list2 rpcapi.ProjectListReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectList", rpcapi.ProjectListArgs{}, &list2); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range list2.Items {
+		if p.Name == "test-pause" && p.Paused {
+			t.Errorf("expected paused=false after ProjectResume, got true")
+		}
+	}
+
+	// Verify cache no longer has the project in PausedProjectIDs.
+	snap2 := cache.Snapshot()
+	if snap2.PausedProjectIDs[projID] {
+		t.Errorf("cache.PausedProjectIDs[%d] = true after resume, want false", projID)
+	}
+}

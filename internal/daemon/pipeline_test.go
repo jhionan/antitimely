@@ -315,3 +315,42 @@ func TestPipeline_AgentSignal_StalePIDsPrunedOnPSFailure(t *testing.T) {
 		t.Errorf("expected prevCPU to be empty after ps failure, got %d entries", len(p.prevCPU))
 	}
 }
+
+func TestPipeline_PausedProject_NoTickWritten(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "paused-proj", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+
+	bin := "claude"
+	cwd := "/work/paused-proj/"
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries:  map[string]bool{"claude": true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwd}},
+		PausedProjectIDs: map[int64]bool{projID: true},
+	})
+	br.IdleSecondsVal = 200 // user idle — agent signals still fire
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: "/work/paused-proj/x"}
+	_ = p.RunTick(ctx, 1000) // establish prevCPU
+
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
+	_ = p.RunTick(ctx, 1005)
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("paused project should not have ticks; got %d", n)
+	}
+	// Observation IS upserted even for a paused project.
+	var obsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM observations WHERE binary_name='claude'`).Scan(&obsCount)
+	if obsCount == 0 {
+		t.Errorf("expected observation to be upserted even for paused project")
+	}
+}

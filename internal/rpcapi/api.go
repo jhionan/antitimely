@@ -37,6 +37,7 @@ type ProjectTotals struct {
 	Name            string
 	BillableSeconds int64 // since company's last invoice (or all-time if no invoice)
 	TodaySeconds    int64
+	Paused          bool
 }
 
 // --- Invoices ---
@@ -99,10 +100,17 @@ type Project struct {
 	ID          int64
 	Name        string
 	CompanyName string // empty if no company
+	Paused      bool
 }
 
 type ProjectDeleteArgs struct{ Name string }
 type ProjectDeleteReply struct{}
+
+type ProjectPauseArgs struct{ Name string }
+type ProjectPauseReply struct{}
+
+type ProjectResumeArgs struct{ Name string }
+type ProjectResumeReply struct{}
 
 // --- Review ---
 

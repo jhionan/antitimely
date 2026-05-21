@@ -98,6 +98,13 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		}
 
 		pid := domain.MatchRules(sig, snap.Rules)
+
+		// Skip tick write if the matched project is paused. Observations are
+		// still upserted above so review history is unaffected.
+		if pid != nil && snap.PausedProjectIDs[*pid] {
+			continue
+		}
+
 		var projectID sql.NullInt64
 		if pid != nil {
 			projectID = sql.NullInt64{Int64: *pid, Valid: true}

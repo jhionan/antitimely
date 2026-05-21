@@ -136,6 +136,8 @@ func projectMenu(stdin *bufio.Scanner) {
 		fmt.Println("  [2] Add project")
 		fmt.Println("  [3] Delete project")
 		fmt.Println("  [4] Assign company to project")
+		fmt.Println("  [5] Pause project")
+		fmt.Println("  [6] Resume project")
 		fmt.Println("  [b] Back")
 		choice, ok := promptLine(stdin, "Choice: ")
 		if !ok {
@@ -172,6 +174,18 @@ func projectMenu(stdin *bufio.Scanner) {
 			} else {
 				projectSetCompany([]string{name, company})
 			}
+		case "5":
+			name, ok := promptLine(stdin, "Project name to pause: ")
+			if !ok || name == "" {
+				continue
+			}
+			projectPause([]string{name})
+		case "6":
+			name, ok := promptLine(stdin, "Project name to resume: ")
+			if !ok || name == "" {
+				continue
+			}
+			projectResume([]string{name})
 		case "b", "":
 			return
 		default:
