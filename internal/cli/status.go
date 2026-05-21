@@ -28,10 +28,11 @@ func cmdStatus(args []string) int {
 	}
 
 	// Header line.
-	fmt.Printf("Idle: %s   |   Tick: %ds   |   Permission: %s\n",
+	fmt.Printf("Idle: %s   |   Tick: %ds   |   Permission: %s   |   Uptime: %s\n",
 		fmtDuration(int64(reply.UserIdleSeconds)),
 		reply.TickIntervalSeconds,
 		reply.PermissionState,
+		fmtDuration(reply.DaemonUptimeSeconds),
 	)
 	if reply.PermissionState == "accessibility_denied" {
 		fmt.Fprintln(os.Stderr,

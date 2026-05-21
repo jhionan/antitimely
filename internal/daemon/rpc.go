@@ -21,6 +21,7 @@ type AntitimelyService struct {
 	Bridge              macos.Bridge
 	TickIntervalSeconds int
 	PermissionState     string
+	StartedAtUnix       int64 // set when the daemon boots; used to report uptime
 }
 
 // Status returns a live snapshot of daemon state.
@@ -61,6 +62,9 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 		reply.PermissionState = "ok"
 	} else {
 		reply.PermissionState = s.PermissionState
+	}
+	if s.StartedAtUnix > 0 {
+		reply.DaemonUptimeSeconds = time.Now().Unix() - s.StartedAtUnix
 	}
 
 	// --- New grouped fields ---

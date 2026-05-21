@@ -22,6 +22,7 @@ type StatusReply struct {
 	TodayTotalSeconds         int64          // sum of all project ticks today (distinct ts)
 	Companies                 []CompanyTotals // ordered by company name; unassigned last
 	UnassignedBillableSeconds int64          // all-time unassigned ticks in seconds
+	DaemonUptimeSeconds       int64          // seconds since the daemon started
 }
 
 type CompanyTotals struct {

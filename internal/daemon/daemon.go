@@ -71,6 +71,7 @@ func Run(cfg Config) error {
 		Cache:               cache,
 		Bridge:              bridge,
 		TickIntervalSeconds: cfg.IntervalSeconds,
+		StartedAtUnix:       time.Now().Unix(),
 	}
 	if err := svc.ReloadCache(); err != nil {
 		return fmt.Errorf("initial cache load: %w", err)
