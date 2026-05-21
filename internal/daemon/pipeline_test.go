@@ -22,7 +22,7 @@ func loadSchema(t *testing.T) string {
 	return string(b)
 }
 
-func newTestPipeline(t *testing.T) (*Pipeline, *macos.FakeBridge, *Cache, *sql.DB) {
+func newTestPipelineWithCfg(t *testing.T, cfg PipelineConfig) (*Pipeline, *macos.FakeBridge, *Cache, *sql.DB) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(1)")
 	if err != nil {
@@ -34,11 +34,17 @@ func newTestPipeline(t *testing.T) (*Pipeline, *macos.FakeBridge, *Cache, *sql.D
 	q := store.New(db)
 	br := &macos.FakeBridge{CWDByPID: map[int]string{}}
 	cache := NewCache()
-	p := NewPipeline(q, br, cache, PipelineConfig{
-		IdleThresholdSec: 120,
-		CPUDeltaThresh:   5,
-	})
+	p := NewPipeline(q, br, cache, cfg)
 	return p, br, cache, db
+}
+
+func newTestPipeline(t *testing.T) (*Pipeline, *macos.FakeBridge, *Cache, *sql.DB) {
+	t.Helper()
+	return newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     5,
+		CPUDeltaThreshIdle: 5, // same as active to keep existing test behaviour
+	})
 }
 
 func TestPipeline_NoSignals_WritesNothing(t *testing.T) {
@@ -128,6 +134,53 @@ func TestPipeline_AgentSignal_CountsOnlyWhenActive(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
 	if n != 1 {
 		t.Errorf("third tick (idle) should not emit; total still 1, got %d", n)
+	}
+}
+
+func TestPipeline_AgentSignal_IdleThresholdHigherWhenUserIdle(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     5,   // low when active
+		CPUDeltaThreshIdle: 100, // high when idle
+	})
+	defer db.Close()
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{"claude": true},
+	})
+
+	// --- Scenario: user is idle, claude burns just 10 centi (below idle threshold) ---
+	br.IdleSecondsVal = 200 // idle
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1000}}
+	br.CWDByPID = map[int]string{999: "/work/x"}
+	_ = p.RunTick(ctx, 1000) // establish prev
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1010}}
+	_ = p.RunTick(ctx, 1005) // delta 10 < idle threshold 100, no emit
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("idle user + low CPU should emit 0 ticks, got %d", n)
+	}
+
+	// --- Scenario: user is idle, claude burns 200 centi (above idle threshold) ---
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1210}}
+	_ = p.RunTick(ctx, 1010) // delta 200 >= idle threshold 100, emit
+
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 1 {
+		t.Errorf("idle user + high CPU should emit 1 tick, got %d total", n)
+	}
+
+	// --- Scenario: user becomes active, claude back to low CPU ---
+	br.IdleSecondsVal = 5 // active
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1220}}
+	_ = p.RunTick(ctx, 1015) // delta 10 >= active threshold 5, emit
+
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 2 {
+		t.Errorf("active user + low CPU should emit 1 more tick; total %d, want 2", n)
 	}
 }
 

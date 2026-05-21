@@ -47,6 +47,8 @@ func runDaemon(args []string) int {
 	interval := fs.Duration("interval", time.Duration(cfg.IntervalSeconds)*time.Second, "Tick interval")
 	idleThresh := fs.Duration("idle-thresh", time.Duration(cfg.IdleThresholdSec)*time.Second, "Idle threshold")
 	cpuThresh := fs.Uint64("agent-cpu-thresh", cfg.AgentCPUThresh, "Minimum CPU centisecond delta per tick to count an agent as active")
+	cpuThreshIdle := fs.Uint64("agent-cpu-thresh-idle", cfg.AgentCPUThreshIdle,
+		"Minimum CPU centisecond delta per tick to count an agent as active when the USER is idle (default 100 = 20% of one core; default for active is 5)")
 	socket := fs.String("socket", cfg.SocketPath, "Unix socket path")
 	dbPath := fs.String("db", cfg.DBPath, "SQLite database path")
 	fs.Parse(args)
@@ -57,6 +59,7 @@ func runDaemon(args []string) int {
 	}
 	cfg.IdleThresholdSec = int(idleThresh.Seconds())
 	cfg.AgentCPUThresh = *cpuThresh
+	cfg.AgentCPUThreshIdle = *cpuThreshIdle
 	cfg.SocketPath = *socket
 	cfg.DBPath = *dbPath
 

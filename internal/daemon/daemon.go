@@ -22,12 +22,13 @@ import (
 )
 
 type Config struct {
-	IntervalSeconds  int
-	IdleThresholdSec int
-	AgentCPUThresh   uint64
-	SocketPath       string
-	DBPath           string
-	PIDPath          string
+	IntervalSeconds    int
+	IdleThresholdSec   int
+	AgentCPUThresh     uint64
+	AgentCPUThreshIdle uint64
+	SocketPath         string
+	DBPath             string
+	PIDPath            string
 }
 
 func DefaultConfig() (Config, error) {
@@ -37,12 +38,13 @@ func DefaultConfig() (Config, error) {
 	}
 	dir := filepath.Join(home, ".antitimely")
 	return Config{
-		IntervalSeconds:  5,
-		IdleThresholdSec: 120,
-		AgentCPUThresh:   5,
-		SocketPath:       filepath.Join(dir, "antitimely.sock"),
-		DBPath:           filepath.Join(dir, "db.sqlite"),
-		PIDPath:          filepath.Join(dir, "antitimely.pid"),
+		IntervalSeconds:    5,
+		IdleThresholdSec:   120,
+		AgentCPUThresh:     5,
+		AgentCPUThreshIdle: 100,
+		SocketPath:         filepath.Join(dir, "antitimely.sock"),
+		DBPath:             filepath.Join(dir, "db.sqlite"),
+		PIDPath:            filepath.Join(dir, "antitimely.pid"),
 	}, nil
 }
 
@@ -75,8 +77,9 @@ func Run(cfg Config) error {
 	}
 
 	pipeline := NewPipeline(q, bridge, cache, PipelineConfig{
-		IdleThresholdSec: cfg.IdleThresholdSec,
-		CPUDeltaThresh:   cfg.AgentCPUThresh,
+		IdleThresholdSec:   cfg.IdleThresholdSec,
+		CPUDeltaThresh:     cfg.AgentCPUThresh,
+		CPUDeltaThreshIdle: cfg.AgentCPUThreshIdle,
 	})
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 

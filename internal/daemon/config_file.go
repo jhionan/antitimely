@@ -12,12 +12,13 @@ import (
 // FileConfig is the YAML config file shape. All fields are optional; empty/zero
 // means "use whatever was already in Config".
 type FileConfig struct {
-	Interval          string `yaml:"interval,omitempty"`
-	IdleThreshold     string `yaml:"idle_threshold,omitempty"`
-	AgentCPUThreshold uint64 `yaml:"agent_cpu_threshold,omitempty"`
-	SocketPath        string `yaml:"socket_path,omitempty"`
-	DBPath            string `yaml:"db_path,omitempty"`
-	PIDPath           string `yaml:"pid_path,omitempty"`
+	Interval              string `yaml:"interval,omitempty"`
+	IdleThreshold         string `yaml:"idle_threshold,omitempty"`
+	AgentCPUThreshold     uint64 `yaml:"agent_cpu_threshold,omitempty"`
+	AgentCPUThresholdIdle uint64 `yaml:"agent_cpu_threshold_idle,omitempty"`
+	SocketPath            string `yaml:"socket_path,omitempty"`
+	DBPath                string `yaml:"db_path,omitempty"`
+	PIDPath               string `yaml:"pid_path,omitempty"`
 }
 
 // DefaultConfigFilePath returns ~/.antitimely/config.yaml.
@@ -70,6 +71,9 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 	if fc.AgentCPUThreshold != 0 {
 		cfg.AgentCPUThresh = fc.AgentCPUThreshold
 	}
+	if fc.AgentCPUThresholdIdle != 0 {
+		cfg.AgentCPUThreshIdle = fc.AgentCPUThresholdIdle
+	}
 	if fc.SocketPath != "" {
 		cfg.SocketPath = expandHome(fc.SocketPath)
 	}
@@ -106,9 +110,15 @@ interval: 5s
 # counting regardless of user idle.
 idle_threshold: 2m
 
-# Minimum CPU centisecond delta per tick for an agent process to count as
-# "active". 5 = ~1% of one core averaged over a 5s tick.
+# CPU threshold for agent processes when the user is ACTIVE. Lower = more
+# permissive. 5 centi = ~1% of one core averaged over a 5s tick.
 agent_cpu_threshold: 5
+
+# CPU threshold for agent processes when the user has been IDLE past
+# idle_threshold. Should be much higher than agent_cpu_threshold so that
+# background TUI redraws don't get counted overnight. 100 centi = ~20% of
+# one core. Real inference / heavy builds easily clear this; idle TUIs don't.
+agent_cpu_threshold_idle: 100
 
 # Override paths (defaults shown). Useful if you want state in a non-default
 # location. Leave commented to use the defaults under ~/.antitimely/.

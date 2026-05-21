@@ -12,8 +12,9 @@ import (
 )
 
 type PipelineConfig struct {
-	IdleThresholdSec int
-	CPUDeltaThresh   uint64
+	IdleThresholdSec   int
+	CPUDeltaThresh     uint64 // applied when user is non-idle
+	CPUDeltaThreshIdle uint64 // applied when user has been idle past IdleThresholdSec
 }
 
 type Pipeline struct {
@@ -50,7 +51,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			signals = append(signals, sig)
 		}
 	}
-	signals = append(signals, p.collectAgentSignals(snap)...)
+	signals = append(signals, p.collectAgentSignals(snap, userPresent)...)
 
 	if len(signals) == 0 {
 		return nil
@@ -119,11 +120,16 @@ func (p *Pipeline) collectFocusSignal(snap *CacheSnapshot) (domain.Signal, bool)
 	}, true
 }
 
-func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot) []domain.Signal {
+func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot, userPresent bool) []domain.Signal {
 	procs, err := p.bridge.ListProcesses()
 	if err != nil {
 		log.Printf("ps: %v", err)
 		return nil
+	}
+
+	threshold := p.cfg.CPUDeltaThresh
+	if !userPresent {
+		threshold = p.cfg.CPUDeltaThreshIdle
 	}
 
 	livePIDs := make(map[int]bool, len(procs))
@@ -139,7 +145,7 @@ func (p *Pipeline) collectAgentSignals(snap *CacheSnapshot) []domain.Signal {
 		if !seen {
 			continue
 		}
-		if proc.CPUTicks-prev < p.cfg.CPUDeltaThresh {
+		if proc.CPUTicks-prev < threshold {
 			continue
 		}
 		cwd, err := p.bridge.ProcessCWD(proc.PID)
