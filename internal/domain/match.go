@@ -43,8 +43,15 @@ func matchOne(sig Signal, r RuleSpec) bool {
 	if r.MatchBinaryName != nil && sig.BinaryName != *r.MatchBinaryName {
 		return false
 	}
-	if r.MatchCwdPrefix != nil && !strings.HasPrefix(sig.Cwd, *r.MatchCwdPrefix) {
-		return false
+	if r.MatchCwdPrefix != nil {
+		// A cwd "matches a prefix" if it equals the prefix exactly (with or
+		// without a trailing separator) OR is a true subdirectory. This avoids
+		// the trap where prefix "/foo/bar/" fails to match cwd "/foo/bar" but
+		// also avoids prefix "/foo/bar" matching cwd "/foo/bar-other".
+		prefix := strings.TrimRight(*r.MatchCwdPrefix, "/")
+		if sig.Cwd != prefix && !strings.HasPrefix(sig.Cwd, prefix+"/") {
+			return false
+		}
 	}
 	return true
 }

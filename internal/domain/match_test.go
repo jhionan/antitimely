@@ -72,6 +72,35 @@ func TestMatchRules(t *testing.T) {
 	}
 }
 
+func TestMatchRules_CwdPrefixSemantics(t *testing.T) {
+	// Prefix with trailing slash should match: exact dir, subdirs.
+	// Should NOT match: sibling dirs with similar names.
+	rules := []RuleSpec{
+		{ID: 1, ProjectID: 100, Priority: 100,
+			MatchBinaryName: ptr("claude"),
+			MatchCwdPrefix:  ptr("/work/antitimely/")},
+	}
+	cases := []struct {
+		cwd  string
+		want bool
+	}{
+		{"/work/antitimely", true},        // exact dir, no trailing slash
+		{"/work/antitimely/", true},       // exact dir, trailing slash
+		{"/work/antitimely/src", true},    // subdir
+		{"/work/antitimely/src/foo.go", true},
+		{"/work/antitimely-other", false}, // sibling with similar name
+		{"/work/antitimelypics", false},   // sibling without separator
+		{"/work/other", false},            // unrelated
+	}
+	for _, tc := range cases {
+		sig := Signal{Source: SourceAgent, BinaryName: "claude", Cwd: tc.cwd}
+		got := MatchRules(sig, rules) != nil
+		if got != tc.want {
+			t.Errorf("cwd %q: match=%v, want %v", tc.cwd, got, tc.want)
+		}
+	}
+}
+
 func TestMatchRules_PriorityOrder(t *testing.T) {
 	// Rule A: high priority (lower number), broad match.
 	// Rule B: low priority (higher number), narrow match.
