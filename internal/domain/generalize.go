@@ -40,7 +40,8 @@ func generalizeCwd(cwd, projectName string) string {
 	parts := strings.Split(cleanCwd, string(filepath.Separator))
 
 	for i := len(parts) - 1; i >= 0; i-- {
-		if parts[i] == projectName {
+		// Case-insensitive match so e.g. project "Antitimely" finds dir "antitimely".
+		if strings.EqualFold(parts[i], projectName) {
 			prefix := strings.Join(parts[:i+1], string(filepath.Separator))
 			return prefix + string(filepath.Separator)
 		}

@@ -21,6 +21,21 @@ func TestProposeRule_AgentWithProjectInPath(t *testing.T) {
 	}
 }
 
+func TestProposeRule_AgentWithProjectInPath_CaseMismatch(t *testing.T) {
+	// Project name is "Antitimely" (capital) but cwd directory is "antitimely" (lowercase).
+	// The generalizer should still find it via case-insensitive match.
+	obs := Observation{
+		Source:     SourceAgent,
+		BinaryName: "opencode",
+		Cwd:        "/Users/rian/focaApp/antitimely",
+	}
+	got := ProposeRule(obs, "Antitimely")
+
+	if got.MatchCwdPrefix == nil || *got.MatchCwdPrefix != "/Users/rian/focaApp/antitimely/" {
+		t.Errorf("MatchCwdPrefix = %v, want /Users/rian/focaApp/antitimely/ (case-insensitive match)", got.MatchCwdPrefix)
+	}
+}
+
 func TestProposeRule_AgentWithoutProjectInPath(t *testing.T) {
 	obs := Observation{
 		Source:     SourceAgent,
