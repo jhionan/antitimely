@@ -49,10 +49,25 @@ func FrontmostReal() (FrontmostInfo, error) {
 
 const titleScript = `
 tell application "System Events"
-	set p to first application process whose frontmost is true
+	set frontProc to first application process whose frontmost is true
 	try
-		set w to first window of p
-		return name of w
+		set winList to windows of frontProc
+		repeat with w in winList
+			try
+				set wn to name of w
+				if wn is not missing value and wn is not "" then
+					return wn as string
+				end if
+			end try
+			-- Fallback: try AXTitle attribute (some Electron apps don't expose 'name' but do expose AXTitle)
+			try
+				set wt to value of attribute "AXTitle" of w
+				if wt is not missing value and wt is not "" then
+					return wt as string
+				end if
+			end try
+		end repeat
+		return ""
 	on error
 		return ""
 	end try
@@ -68,6 +83,60 @@ func FocusedWindowTitleReal() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// FocusedWindowDebugReal returns a multi-line report describing every window
+// of the frontmost process: index, name, AXTitle, AXRole, AXSubrole. Used
+// by 'atl debug windows' to diagnose title-detection issues.
+func FocusedWindowDebugReal() (string, error) {
+	const debugScript = `
+tell application "System Events"
+	set frontProc to first application process whose frontmost is true
+	set out to "frontmost: " & (name of frontProc) & " (bundle: " & (bundle identifier of frontProc) & ")" & linefeed
+	try
+		set winList to windows of frontProc
+		set out to out & "  windows: " & (count of winList) & linefeed
+		set i to 0
+		repeat with w in winList
+			set i to i + 1
+			set out to out & "  [" & i & "]"
+			try
+				set wn to name of w
+				if wn is missing value then set wn to "(missing)"
+				set out to out & " name=" & quoted form of (wn as string)
+			on error
+				set out to out & " name=(error)"
+			end try
+			try
+				set wt to value of attribute "AXTitle" of w
+				if wt is missing value then set wt to "(missing)"
+				set out to out & " AXTitle=" & quoted form of (wt as string)
+			on error
+				set out to out & " AXTitle=(error)"
+			end try
+			try
+				set wr to value of attribute "AXRole" of w
+				set out to out & " AXRole=" & (wr as string)
+			on error
+			end try
+			try
+				set wsr to value of attribute "AXSubrole" of w
+				set out to out & " AXSubrole=" & (wsr as string)
+			on error
+			end try
+			set out to out & linefeed
+		end repeat
+		return out
+	on error errMsg
+		return out & "ERROR: " & errMsg
+	end try
+end tell
+`
+	out, err := runOsascript(debugScript)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 func runOsascript(script string) (string, error) {

@@ -38,6 +38,8 @@ func Dispatch(args []string) int {
 		return cmdReset(args[1:])
 	case "config":
 		return cmdConfig(args[1:])
+	case "debug":
+		return cmdDebug(args[1:])
 	case "install-launch-agent":
 		return cmdInstallLaunchAgent(args[1:])
 	case "uninstall-launch-agent":
@@ -66,6 +68,7 @@ Usage:
   antitimely config   init  |  show  |  path
   antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
   antitimely uninstall-launch-agent   remove launch agent and stop background daemon
+  antitimely debug   windows  |  frontmost  |  idle
   antitimely help    show this message
 
 Run any subcommand with the daemon running ('antitimely daemon' in another terminal).
