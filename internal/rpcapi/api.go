@@ -240,3 +240,12 @@ type ProjectSetCompanyArgs struct {
 	CompanyName string // empty = unassign
 }
 type ProjectSetCompanyReply struct{}
+
+type SetCompanyBillingArgs struct {
+	Name        string
+	BillingMode string
+	Currency    string
+	RateCents   int64
+	BilledFrom  string
+}
+type SetCompanyBillingReply struct{}

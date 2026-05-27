@@ -16,7 +16,7 @@ import (
 
 func cmdInvoice(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|show-senders> ...")
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|show-senders|setup> ...")
 		return 64
 	}
 	switch args[0] {
@@ -30,6 +30,8 @@ func cmdInvoice(args []string) int {
 		return invoiceGenerate(args[1:])
 	case "show-senders":
 		return invoiceShowSenders(args[1:])
+	case "setup":
+		return invoiceSetup(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: invoice %s\n", args[0])
 		return 64
@@ -260,4 +262,52 @@ func parseOptionalDate(s string) (int64, error) {
 		return 0, err
 	}
 	return t.Unix(), nil
+}
+
+func invoiceSetup(args []string) int {
+	_ = args
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+
+	// Step 1: Ensure Dentix company exists.
+	if err := client.Call(rpcapi.ServiceName+".CompanyAdd",
+		rpcapi.CompanyAddArgs{Name: "Dentix"}, &rpcapi.CompanyAddReply{}); err != nil {
+		// Ignore "UNIQUE constraint" errors — company already exists.
+		if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "already exists") {
+			fmt.Fprintln(os.Stderr, "CompanyAdd Dentix:", err)
+			return 1
+		}
+	}
+
+	// Step 2: Move project Dentix → company Dentix.
+	if err := client.Call(rpcapi.ServiceName+".ProjectSetCompany",
+		rpcapi.ProjectSetCompanyArgs{ProjectName: "Dentix", CompanyName: "Dentix"},
+		&rpcapi.ProjectSetCompanyReply{}); err != nil {
+		fmt.Fprintln(os.Stderr, "ProjectSetCompany Dentix → Dentix:", err)
+		return 1
+	}
+
+	// Step 3: Configure billing for BClouder and Dentix.
+	plans := []rpcapi.SetCompanyBillingArgs{
+		{Name: "BClouder", BillingMode: "hourly", Currency: "CAD", RateCents: 5000, BilledFrom: "es"},
+		{Name: "Dentix", BillingMode: "monthly_fixed", Currency: "EUR", RateCents: 300000, BilledFrom: "br"},
+	}
+	for _, p := range plans {
+		if err := client.Call(rpcapi.ServiceName+".SetCompanyBilling",
+			p, &rpcapi.SetCompanyBillingReply{}); err != nil {
+			fmt.Fprintf(os.Stderr, "SetCompanyBilling %s: %v\n", p.Name, err)
+			return 1
+		}
+		fmt.Printf("  set %s → mode=%s currency=%s rate=%d billed_from=%s\n",
+			p.Name, p.BillingMode, p.Currency, p.RateCents, p.BilledFrom)
+	}
+
+	fmt.Println("\nSetup complete. Next steps:")
+	fmt.Println("  1. Edit ~/.antitimely/config.yaml to add `senders:` block (see docs/superpowers/specs/2026-05-27-invoice-pdf-design.md)")
+	fmt.Println("  2. Run `atl invoice show-senders` to validate.")
+	fmt.Println("  3. Run `atl invoice generate <company>` to produce your first PDF.")
+	return 0
 }
