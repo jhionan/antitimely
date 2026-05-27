@@ -39,6 +39,13 @@ type BankField struct {
 	Value string `yaml:"value"`
 }
 
+type LineItem struct {
+	Quantity   string // e.g. "160.00" (formatted hours or units)
+	RateAmount string // e.g. "75.00" (formatted per-unit cost)
+	Amount     string // e.g. "12000.00" (formatted total)
+	Tax        string // e.g. "2160.00" (formatted tax amount, if applicable)
+}
+
 type GlobalInvoiceConfig struct {
 	OutputDir     string `yaml:"output_dir"`
 	LineItemLabel string `yaml:"line_item_label"`
