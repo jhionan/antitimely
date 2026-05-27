@@ -306,7 +306,7 @@ func (s *AntitimelyService) ReloadCache() error {
 	for _, id := range pausedIDs {
 		snap.PausedProjectIDs[id] = true
 	}
-	s.Cache.Store(snap)
+	s.Cache.StorePreservingRuntime(snap)
 	return nil
 }
 

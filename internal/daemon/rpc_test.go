@@ -579,3 +579,23 @@ func TestRPC_ProjectPauseResume(t *testing.T) {
 		t.Errorf("cache.PausedProjectIDs[%d] = true after resume, want false", projID)
 	}
 }
+
+func TestRPC_ReloadCache_PreservesArmedProjects(t *testing.T) {
+	client, _, cache := setupRPCServer(t)
+
+	// Pre-arm two project IDs.
+	cache.ArmAllProjects([]int64{100, 200})
+
+	// Trigger a cache reload (the simplest way from a test is via a no-op
+	// watched-program add, which calls ReloadCache).
+	if err := client.Call(rpcapi.ServiceName+".WatchAdd",
+		rpcapi.WatchAddArgs{Kind: "bundle", Identifier: "com.preserve.test"},
+		&rpcapi.WatchAddReply{}); err != nil {
+		t.Fatalf("WatchAdd: %v", err)
+	}
+
+	snap := cache.Snapshot()
+	if !snap.ArmedProjects[100] || !snap.ArmedProjects[200] {
+		t.Errorf("ArmedProjects lost across ReloadCache, got %v", snap.ArmedProjects)
+	}
+}
