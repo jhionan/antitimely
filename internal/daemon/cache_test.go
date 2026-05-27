@@ -144,3 +144,38 @@ func TestCache_DisarmProject_Absent_NoChange(t *testing.T) {
 		t.Errorf("expected {1,2} still armed, got %v", got)
 	}
 }
+
+func TestCache_StorePreservingRuntime_KeepsArmed(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{10, 20})
+
+	// Simulate ReloadCache: build a fresh snapshot from "DB" with paused
+	// projects and rules, then install via StorePreservingRuntime.
+	rebuilt := &CacheSnapshot{
+		AllowedBundles:   map[string]bool{"com.example": true},
+		AllowedBinaries:  map[string]bool{},
+		Rules:            nil,
+		PausedProjectIDs: map[int64]bool{30: true},
+	}
+	c.StorePreservingRuntime(rebuilt)
+
+	snap := c.Snapshot()
+	if !snap.AllowedBundles["com.example"] {
+		t.Errorf("DB-driven fields lost, got %v", snap.AllowedBundles)
+	}
+	if !snap.PausedProjectIDs[30] {
+		t.Errorf("PausedProjectIDs lost, got %v", snap.PausedProjectIDs)
+	}
+	if !snap.ArmedProjects[10] || !snap.ArmedProjects[20] {
+		t.Errorf("ArmedProjects not preserved across reload, got %v", snap.ArmedProjects)
+	}
+}
+
+func TestCache_StorePreservingRuntime_HandlesNilPrev(t *testing.T) {
+	c := NewCache() // ArmedProjects starts as empty (not nil)
+	rebuilt := &CacheSnapshot{}
+	c.StorePreservingRuntime(rebuilt)
+	if c.Snapshot().ArmedProjects == nil {
+		t.Errorf("ArmedProjects should be non-nil after preserve, got nil")
+	}
+}

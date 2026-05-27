@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"maps"
 	"sync/atomic"
 
 	"github.com/rian/antitimely/internal/domain"
@@ -124,6 +125,25 @@ func (c *Cache) DisarmProject(id int64) {
 			}
 		}
 		if c.ptr.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
+
+// StorePreservingRuntime installs next as the current snapshot, but first
+// copies ArmedProjects forward from the previous snapshot. Arm state is
+// runtime-only (not DB-derived) and must survive every ReloadCache caller:
+// rule edits, watched-program changes, single project pause/resume, etc.
+//
+// Called instead of Store from ReloadCache.
+func (c *Cache) StorePreservingRuntime(next *CacheSnapshot) {
+	for {
+		prev := c.ptr.Load()
+		next.ArmedProjects = maps.Clone(prev.ArmedProjects)
+		if next.ArmedProjects == nil {
+			next.ArmedProjects = map[int64]bool{}
+		}
+		if c.ptr.CompareAndSwap(prev, next) {
 			return
 		}
 	}
