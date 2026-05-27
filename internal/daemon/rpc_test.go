@@ -743,3 +743,20 @@ func TestRPC_ReloadCache_PreservesArmedProjects(t *testing.T) {
 		t.Errorf("ArmedProjects lost across ReloadCache, got %v", snap.ArmedProjects)
 	}
 }
+
+func TestRPC_ProjectAdd_ArmsNewProject(t *testing.T) {
+	client, _, cache := setupRPCServer(t)
+
+	var reply rpcapi.ProjectAddReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectAdd",
+		rpcapi.ProjectAddArgs{Name: "fresh"},
+		&reply); err != nil {
+		t.Fatalf("ProjectAdd: %v", err)
+	}
+	if reply.ID == 0 {
+		t.Fatalf("expected non-zero new project id, got 0")
+	}
+	if !cache.Snapshot().ArmedProjects[reply.ID] {
+		t.Errorf("expected new project %d armed, got %v", reply.ID, cache.Snapshot().ArmedProjects)
+	}
+}

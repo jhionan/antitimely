@@ -392,6 +392,7 @@ func (s *AntitimelyService) ProjectAdd(args rpcapi.ProjectAddArgs, reply *rpcapi
 	if err != nil {
 		return err
 	}
+	s.Cache.ArmProject(id)
 	reply.ID = id
 	return nil
 }
