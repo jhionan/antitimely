@@ -580,6 +580,150 @@ func TestRPC_ProjectPauseResume(t *testing.T) {
 	}
 }
 
+func TestRPC_ProjectPauseAllResumeAll(t *testing.T) {
+	client, _, cache := setupRPCServer(t)
+
+	// Pause-all on an empty project set should succeed with Count=0.
+	var emptyReply rpcapi.ProjectPauseAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectPauseAll",
+		rpcapi.ProjectPauseAllArgs{}, &emptyReply); err != nil {
+		t.Fatalf("PauseAll on empty set: %v", err)
+	}
+	if emptyReply.Count != 0 {
+		t.Errorf("PauseAll empty Count = %d, want 0", emptyReply.Count)
+	}
+
+	// Create three projects; pause one up-front so we can verify pause-all
+	// treats already-paused as a no-op success without flipping anything.
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		if err := client.Call(rpcapi.ServiceName+".ProjectAdd",
+			rpcapi.ProjectAddArgs{Name: name}, &rpcapi.ProjectAddReply{}); err != nil {
+			t.Fatalf("add %s: %v", name, err)
+		}
+	}
+	if err := client.Call(rpcapi.ServiceName+".ProjectPause",
+		rpcapi.ProjectPauseArgs{Name: "bravo"}, &rpcapi.ProjectPauseReply{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// PauseAll should touch all 3 rows and end with every project paused.
+	var pAll rpcapi.ProjectPauseAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectPauseAll",
+		rpcapi.ProjectPauseAllArgs{}, &pAll); err != nil {
+		t.Fatalf("PauseAll: %v", err)
+	}
+	if pAll.Count != 3 {
+		t.Errorf("PauseAll Count = %d, want 3", pAll.Count)
+	}
+
+	var listAfterPause rpcapi.ProjectListReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectList",
+		rpcapi.ProjectListArgs{}, &listAfterPause); err != nil {
+		t.Fatal(err)
+	}
+	if len(listAfterPause.Items) != 3 {
+		t.Fatalf("expected 3 projects, got %d", len(listAfterPause.Items))
+	}
+	pausedIDs := map[int64]bool{}
+	for _, p := range listAfterPause.Items {
+		if !p.Paused {
+			t.Errorf("project %q paused=false after PauseAll", p.Name)
+		}
+		pausedIDs[p.ID] = true
+	}
+
+	// Cache should hold all three IDs as paused.
+	snap := cache.Snapshot()
+	for id := range pausedIDs {
+		if !snap.PausedProjectIDs[id] {
+			t.Errorf("cache.PausedProjectIDs[%d] missing after PauseAll", id)
+		}
+	}
+
+	// ResumeAll clears them all.
+	var rAll rpcapi.ProjectResumeAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectResumeAll",
+		rpcapi.ProjectResumeAllArgs{}, &rAll); err != nil {
+		t.Fatalf("ResumeAll: %v", err)
+	}
+	if rAll.Count != 3 {
+		t.Errorf("ResumeAll Count = %d, want 3", rAll.Count)
+	}
+
+	var listAfterResume rpcapi.ProjectListReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectList",
+		rpcapi.ProjectListArgs{}, &listAfterResume); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range listAfterResume.Items {
+		if p.Paused {
+			t.Errorf("project %q paused=true after ResumeAll", p.Name)
+		}
+	}
+
+	snap2 := cache.Snapshot()
+	if len(snap2.PausedProjectIDs) != 0 {
+		t.Errorf("cache.PausedProjectIDs has %d entries after ResumeAll, want 0", len(snap2.PausedProjectIDs))
+	}
+}
+
+func TestRPC_ProjectResumeAll_ArmsAllProjects(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if _, err := q.AddProject(ctx, store.AddProjectParams{Name: name, CreatedAt: 1000}); err != nil {
+			t.Fatalf("AddProject %s: %v", name, err)
+		}
+	}
+
+	var reply rpcapi.ProjectResumeAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectResumeAll",
+		rpcapi.ProjectResumeAllArgs{}, &reply); err != nil {
+		t.Fatalf("ProjectResumeAll: %v", err)
+	}
+
+	snap := cache.Snapshot()
+	if len(snap.ArmedProjects) != 3 {
+		t.Errorf("expected 3 armed projects, got %d (%v)", len(snap.ArmedProjects), snap.ArmedProjects)
+	}
+}
+
+func TestRPC_ProjectResumeAll_NoProjects_NoPanic(t *testing.T) {
+	client, _, cache := setupRPCServer(t)
+
+	var reply rpcapi.ProjectResumeAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectResumeAll",
+		rpcapi.ProjectResumeAllArgs{}, &reply); err != nil {
+		t.Fatalf("ProjectResumeAll: %v", err)
+	}
+
+	if len(cache.Snapshot().ArmedProjects) != 0 {
+		t.Errorf("expected empty arm map, got %v", cache.Snapshot().ArmedProjects)
+	}
+}
+
+func TestRPC_ProjectResume_Single_DoesNotArm(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "solo", CreatedAt: 1000}); err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+
+	if err := client.Call(rpcapi.ServiceName+".ProjectResume",
+		rpcapi.ProjectResumeArgs{Name: "solo"},
+		&rpcapi.ProjectResumeReply{}); err != nil {
+		t.Fatalf("ProjectResume: %v", err)
+	}
+
+	if len(cache.Snapshot().ArmedProjects) != 0 {
+		t.Errorf("single resume should not arm anything, got %v", cache.Snapshot().ArmedProjects)
+	}
+}
+
 func TestRPC_ReloadCache_PreservesArmedProjects(t *testing.T) {
 	client, _, cache := setupRPCServer(t)
 

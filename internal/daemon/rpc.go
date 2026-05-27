@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rian/antitimely/internal/domain"
@@ -306,6 +307,23 @@ func (s *AntitimelyService) ReloadCache() error {
 	for _, id := range pausedIDs {
 		snap.PausedProjectIDs[id] = true
 	}
+	// Distinct, trailing-slash-normalized cwd prefixes for the agent pipeline's
+	// directory-widening fast check.
+	seenPrefix := map[string]struct{}{}
+	for _, r := range snap.Rules {
+		if r.MatchCwdPrefix == nil {
+			continue
+		}
+		p := strings.TrimRight(*r.MatchCwdPrefix, "/")
+		if p == "" {
+			continue
+		}
+		if _, ok := seenPrefix[p]; ok {
+			continue
+		}
+		seenPrefix[p] = struct{}{}
+		snap.CwdPrefixes = append(snap.CwdPrefixes, p)
+	}
 	s.Cache.StorePreservingRuntime(snap)
 	return nil
 }
@@ -434,6 +452,45 @@ func (s *AntitimelyService) ProjectResume(args rpcapi.ProjectResumeArgs, reply *
 		return err
 	}
 	return s.ReloadCache()
+}
+
+// ProjectPauseAll marks every project as paused. The reply.Count is the number
+// of rows the UPDATE touched (i.e., total project count) — not the number that
+// changed state, because SQLite's RowsAffected for UPDATE returns matched, not
+// modified, rows.
+func (s *AntitimelyService) ProjectPauseAll(args rpcapi.ProjectPauseAllArgs, reply *rpcapi.ProjectPauseAllReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	n, err := s.Q.PauseAllProjects(ctx)
+	if err != nil {
+		return err
+	}
+	reply.Count = n
+	return s.ReloadCache()
+}
+
+// ProjectResumeAll clears the paused flag on every project.
+func (s *AntitimelyService) ProjectResumeAll(args rpcapi.ProjectResumeAllArgs, reply *rpcapi.ProjectResumeAllReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	n, err := s.Q.ResumeAllProjects(ctx)
+	if err != nil {
+		return err
+	}
+	reply.Count = n
+	if err := s.ReloadCache(); err != nil {
+		return err
+	}
+	rows, err := s.Q.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	s.Cache.ArmAllProjects(ids)
+	return nil
 }
 
 // PendingReview returns observations that have unassigned ticks and need tagging.
