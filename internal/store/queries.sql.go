@@ -112,6 +112,20 @@ func (q *Queries) AddWatchedProgram(ctx context.Context, arg AddWatchedProgramPa
 	return err
 }
 
+const allocateNextInvoiceNumber = `-- name: AllocateNextInvoiceNumber :one
+UPDATE sender_state
+SET next_invoice_number = next_invoice_number + 1
+WHERE sender_key = ?
+RETURNING next_invoice_number - 1 AS allocated
+`
+
+func (q *Queries) AllocateNextInvoiceNumber(ctx context.Context, senderKey string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, allocateNextInvoiceNumber, senderKey)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const applyRuleRetroactivelyCounted = `-- name: ApplyRuleRetroactivelyCounted :execrows
 UPDATE ticks
 SET project_id = ?
@@ -192,6 +206,26 @@ func (q *Queries) CountPendingReviewSignatures(ctx context.Context) (int64, erro
 	return n, err
 }
 
+const countTicksForCompanyInRange = `-- name: CountTicksForCompanyInRange :one
+SELECT COUNT(*) FROM ticks t
+JOIN projects p ON p.id = t.project_id
+WHERE p.company_id = ? AND p.paused = 0
+  AND t.ts >= ? AND t.ts < ?
+`
+
+type CountTicksForCompanyInRangeParams struct {
+	CompanyID sql.NullInt64
+	Ts        int64
+	Ts_2      int64
+}
+
+func (q *Queries) CountTicksForCompanyInRange(ctx context.Context, arg CountTicksForCompanyInRangeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTicksForCompanyInRange, arg.CompanyID, arg.Ts, arg.Ts_2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteCompanyByName = `-- name: DeleteCompanyByName :exec
 DELETE FROM companies WHERE name = ?
 `
@@ -241,6 +275,26 @@ func (q *Queries) GetCompanyByName(ctx context.Context, name string) (GetCompany
 	row := q.db.QueryRowContext(ctx, getCompanyByName, name)
 	var i GetCompanyByNameRow
 	err := row.Scan(&i.ID, &i.Name)
+	return i, err
+}
+
+const getCompanyForInvoice = `-- name: GetCompanyForInvoice :one
+SELECT id, name, created_at, billing_mode, currency, rate_cents, billed_from
+FROM companies WHERE name = ?
+`
+
+func (q *Queries) GetCompanyForInvoice(ctx context.Context, name string) (Company, error) {
+	row := q.db.QueryRowContext(ctx, getCompanyForInvoice, name)
+	var i Company
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.BillingMode,
+		&i.Currency,
+		&i.RateCents,
+		&i.BilledFrom,
+	)
 	return i, err
 }
 
@@ -295,6 +349,43 @@ type IgnoreObservationParams struct {
 func (q *Queries) IgnoreObservation(ctx context.Context, arg IgnoreObservationParams) error {
 	_, err := q.db.ExecContext(ctx, ignoreObservation, arg.ObservationID, arg.IgnoredAt)
 	return err
+}
+
+const insertInvoiceFull = `-- name: InsertInvoiceFull :one
+INSERT INTO invoices (
+    company_id, sent_at, note, created_at,
+    number, pdf_path, total_cents, currency, sender_key
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id
+`
+
+type InsertInvoiceFullParams struct {
+	CompanyID  int64
+	SentAt     int64
+	Note       string
+	CreatedAt  int64
+	Number     sql.NullString
+	PdfPath    sql.NullString
+	TotalCents sql.NullInt64
+	Currency   sql.NullString
+	SenderKey  sql.NullString
+}
+
+func (q *Queries) InsertInvoiceFull(ctx context.Context, arg InsertInvoiceFullParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertInvoiceFull,
+		arg.CompanyID,
+		arg.SentAt,
+		arg.Note,
+		arg.CreatedAt,
+		arg.Number,
+		arg.PdfPath,
+		arg.TotalCents,
+		arg.Currency,
+		arg.SenderKey,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertTick = `-- name: InsertTick :exec
@@ -354,6 +445,17 @@ func (q *Queries) LastInvoicePerCompany(ctx context.Context) ([]LastInvoicePerCo
 		return nil, err
 	}
 	return items, nil
+}
+
+const lastInvoiceSentForCompany = `-- name: LastInvoiceSentForCompany :one
+SELECT sent_at FROM invoices WHERE company_id = ? ORDER BY sent_at DESC LIMIT 1
+`
+
+func (q *Queries) LastInvoiceSentForCompany(ctx context.Context, companyID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, lastInvoiceSentForCompany, companyID)
+	var sent_at int64
+	err := row.Scan(&sent_at)
+	return sent_at, err
 }
 
 const listAllInvoices = `-- name: ListAllInvoices :many
@@ -798,6 +900,45 @@ type RetagSingleObservationParams struct {
 
 func (q *Queries) RetagSingleObservation(ctx context.Context, arg RetagSingleObservationParams) error {
 	_, err := q.db.ExecContext(ctx, retagSingleObservation, arg.ProjectID, arg.ObservationID)
+	return err
+}
+
+const seedSenderState = `-- name: SeedSenderState :exec
+INSERT OR IGNORE INTO sender_state (sender_key, next_invoice_number) VALUES (?, ?)
+`
+
+type SeedSenderStateParams struct {
+	SenderKey         string
+	NextInvoiceNumber int64
+}
+
+func (q *Queries) SeedSenderState(ctx context.Context, arg SeedSenderStateParams) error {
+	_, err := q.db.ExecContext(ctx, seedSenderState, arg.SenderKey, arg.NextInvoiceNumber)
+	return err
+}
+
+const setCompanyBilling = `-- name: SetCompanyBilling :exec
+UPDATE companies
+SET billing_mode = ?, currency = ?, rate_cents = ?, billed_from = ?
+WHERE name = ?
+`
+
+type SetCompanyBillingParams struct {
+	BillingMode string
+	Currency    sql.NullString
+	RateCents   sql.NullInt64
+	BilledFrom  sql.NullString
+	Name        string
+}
+
+func (q *Queries) SetCompanyBilling(ctx context.Context, arg SetCompanyBillingParams) error {
+	_, err := q.db.ExecContext(ctx, setCompanyBilling,
+		arg.BillingMode,
+		arg.Currency,
+		arg.RateCents,
+		arg.BilledFrom,
+		arg.Name,
+	)
 	return err
 }
 
