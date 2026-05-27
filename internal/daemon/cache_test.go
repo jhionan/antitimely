@@ -121,3 +121,26 @@ func TestCache_ArmAllProjects_ReplacesPreviousMap(t *testing.T) {
 		}
 	}
 }
+
+func TestCache_DisarmProject(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{1, 2, 3})
+	c.DisarmProject(2)
+	got := c.Snapshot().ArmedProjects
+	if got[2] {
+		t.Errorf("expected project 2 disarmed, got %v", got)
+	}
+	if !got[1] || !got[3] {
+		t.Errorf("expected projects 1 and 3 still armed, got %v", got)
+	}
+}
+
+func TestCache_DisarmProject_Absent_NoChange(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{1, 2})
+	c.DisarmProject(99) // never armed
+	got := c.Snapshot().ArmedProjects
+	if len(got) != 2 || !got[1] || !got[2] {
+		t.Errorf("expected {1,2} still armed, got %v", got)
+	}
+}

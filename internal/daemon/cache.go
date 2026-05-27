@@ -108,3 +108,23 @@ func (c *Cache) ArmProject(id int64) {
 		}
 	}
 }
+
+// DisarmProject atomically removes id from ArmedProjects. No-op if absent.
+func (c *Cache) DisarmProject(id int64) {
+	for {
+		cur := c.ptr.Load()
+		if !cur.ArmedProjects[id] {
+			return
+		}
+		next := *cur
+		next.ArmedProjects = make(map[int64]bool, len(cur.ArmedProjects)-1)
+		for k, v := range cur.ArmedProjects {
+			if k != id {
+				next.ArmedProjects[k] = v
+			}
+		}
+		if c.ptr.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
