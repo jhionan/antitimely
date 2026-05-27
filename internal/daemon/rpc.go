@@ -545,6 +545,7 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		if err2 != nil {
 			return err2
 		}
+		s.Cache.ArmProject(id)
 		proj.ID = id
 		proj.Name = args.ProjectName
 	}

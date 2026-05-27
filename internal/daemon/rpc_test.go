@@ -760,3 +760,39 @@ func TestRPC_ProjectAdd_ArmsNewProject(t *testing.T) {
 		t.Errorf("expected new project %d armed, got %v", reply.ID, cache.Snapshot().ArmedProjects)
 	}
 }
+
+func TestRPC_TagSignature_CreateProject_Arms(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+
+	// Seed a single observation row that the tag will reference.
+	obsID, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/Users/rian/work/onfly", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatalf("UpsertObservation: %v", err)
+	}
+
+	var reply rpcapi.TagSignatureReply
+	if err := client.Call(rpcapi.ServiceName+".TagSignature",
+		rpcapi.TagSignatureArgs{
+			ProjectName:   "onfly-new",
+			ObservationID: obsID,
+			CreateProject: true,
+			// Rule is nil — just create-project + retag single observation.
+		},
+		&reply); err != nil {
+		t.Fatalf("TagSignature: %v", err)
+	}
+
+	// Read back the newly-created project id.
+	row := db.QueryRow(`SELECT id FROM projects WHERE name=?`, "onfly-new")
+	var newID int64
+	if err := row.Scan(&newID); err != nil {
+		t.Fatalf("scan new project id: %v", err)
+	}
+	if !cache.Snapshot().ArmedProjects[newID] {
+		t.Errorf("expected create-on-the-fly project %d armed, got %v", newID, cache.Snapshot().ArmedProjects)
+	}
+}
