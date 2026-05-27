@@ -37,4 +37,15 @@ func TestCache_SwapVisible(t *testing.T) {
 	}
 }
 
+func TestCache_InitialArmedProjectsEmpty(t *testing.T) {
+	c := NewCache()
+	snap := c.Snapshot()
+	if snap.ArmedProjects == nil {
+		t.Fatal("ArmedProjects should be initialized, got nil")
+	}
+	if len(snap.ArmedProjects) != 0 {
+		t.Errorf("expected empty ArmedProjects, got %v", snap.ArmedProjects)
+	}
+}
+
 func strPtrLocal(s string) *string { return &s }

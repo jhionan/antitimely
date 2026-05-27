@@ -14,6 +14,13 @@ type CacheSnapshot struct {
 	AllowedBinaries  map[string]bool
 	Rules            []domain.RuleSpec
 	PausedProjectIDs map[int64]bool // project_id -> paused
+	ArmedProjects    map[int64]bool // project_id -> armed (needs focus before agent ticks count)
+
+	// CwdPrefixes is the deduplicated set of cwd prefixes drawn from Rules
+	// (trailing slash stripped). Built once per ReloadCache so the agent
+	// pipeline can widen the binary allowlist by tracked-directory match
+	// without rewalking Rules every tick.
+	CwdPrefixes []string
 }
 
 // Cache holds the current snapshot with lock-free read access.
@@ -29,9 +36,34 @@ func NewCache() *Cache {
 		AllowedBinaries:  map[string]bool{},
 		Rules:            nil,
 		PausedProjectIDs: map[int64]bool{},
+		ArmedProjects:    map[int64]bool{},
 	})
 	return c
 }
 
 func (c *Cache) Snapshot() *CacheSnapshot { return c.ptr.Load() }
 func (c *Cache) Store(s *CacheSnapshot)   { c.ptr.Store(s) }
+
+// MarkProjectActive atomically swaps in a snapshot with projectID removed
+// from PausedProjectIDs. No-op when the project isn't currently paused.
+// Used by the pipeline's auto-resume path so a paused project's first
+// detected agent signal both flips the DB flag and clears the in-memory
+// pause set without a full ReloadCache.
+func (c *Cache) MarkProjectActive(projectID int64) {
+	for {
+		cur := c.ptr.Load()
+		if !cur.PausedProjectIDs[projectID] {
+			return
+		}
+		next := *cur
+		next.PausedProjectIDs = make(map[int64]bool, len(cur.PausedProjectIDs)-1)
+		for k, v := range cur.PausedProjectIDs {
+			if k != projectID {
+				next.PausedProjectIDs[k] = v
+			}
+		}
+		if c.ptr.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
