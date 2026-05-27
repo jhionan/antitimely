@@ -67,3 +67,25 @@ func (c *Cache) MarkProjectActive(projectID int64) {
 		}
 	}
 }
+
+// ArmAllProjects atomically installs a fresh ArmedProjects map containing
+// every supplied ID. An empty or nil slice is a no-op — used by the
+// ProjectResumeAll RPC handler whose ListProjects call might degenerately
+// return zero rows; silently disarming the world is exactly the failure
+// mode this feature exists to prevent.
+func (c *Cache) ArmAllProjects(ids []int64) {
+	if len(ids) == 0 {
+		return
+	}
+	for {
+		cur := c.ptr.Load()
+		next := *cur
+		next.ArmedProjects = make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			next.ArmedProjects[id] = true
+		}
+		if c.ptr.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}

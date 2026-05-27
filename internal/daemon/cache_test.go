@@ -49,3 +49,45 @@ func TestCache_InitialArmedProjectsEmpty(t *testing.T) {
 }
 
 func strPtrLocal(s string) *string { return &s }
+
+func TestCache_ArmAllProjects(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{1, 2, 3})
+	got := c.Snapshot().ArmedProjects
+	for _, id := range []int64{1, 2, 3} {
+		if !got[id] {
+			t.Errorf("expected project %d armed, got %v", id, got)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("expected exactly 3 armed, got %d", len(got))
+	}
+}
+
+func TestCache_ArmAllProjects_EmptyIsNoop(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{1, 2})
+	c.ArmAllProjects(nil)
+	if len(c.Snapshot().ArmedProjects) != 2 {
+		t.Errorf("nil input should be no-op, got %v", c.Snapshot().ArmedProjects)
+	}
+	c.ArmAllProjects([]int64{})
+	if len(c.Snapshot().ArmedProjects) != 2 {
+		t.Errorf("empty slice input should be no-op, got %v", c.Snapshot().ArmedProjects)
+	}
+}
+
+func TestCache_ArmAllProjects_ReplacesPreviousMap(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{1, 2})
+	c.ArmAllProjects([]int64{3, 4, 5})
+	got := c.Snapshot().ArmedProjects
+	if got[1] || got[2] {
+		t.Errorf("previous IDs should be gone, got %v", got)
+	}
+	for _, id := range []int64{3, 4, 5} {
+		if !got[id] {
+			t.Errorf("expected project %d armed, got %v", id, got)
+		}
+	}
+}
