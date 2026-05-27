@@ -4,15 +4,19 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/rian/antitimely/internal/invoice"
 	"github.com/rian/antitimely/internal/rpcapi"
 )
 
 func cmdInvoice(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete> ...")
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|show-senders> ...")
 		return 64
 	}
 	switch args[0] {
@@ -22,6 +26,10 @@ func cmdInvoice(args []string) int {
 		return invoiceList(args[1:])
 	case "delete":
 		return invoiceDelete(args[1:])
+	case "generate":
+		return invoiceGenerate(args[1:])
+	case "show-senders":
+		return invoiceShowSenders(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: invoice %s\n", args[0])
 		return 64
@@ -136,4 +144,120 @@ func invoiceDelete(args []string) int {
 	}
 	fmt.Printf("Deleted invoice #%d\n", id)
 	return 0
+}
+
+func invoiceGenerate(args []string) int {
+	fs := flag.NewFlagSet("invoice generate", flag.ExitOnError)
+	from := fs.String("from", "", "Period start: YYYY-MM-DD (defaults per billing mode)")
+	to := fs.String("to", "", "Period end: YYYY-MM-DD (defaults per billing mode)")
+	issueDate := fs.String("issue-date", "", "Date on the invoice: YYYY-MM-DD (default: today)")
+	note := fs.String("note", "", "Stored in invoices.note (not printed on PDF)")
+	dryRun := fs.Bool("dry-run", false, "Render PDF to a temp file without DB writes")
+	allowEmpty := fs.Bool("allow-empty", false, "For hourly mode, allow 0-tick periods")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--dry-run] [--allow-empty]")
+		return 64
+	}
+	company := fs.Arg(0)
+	fromUnix, err := parseOptionalDate(*from)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid --from:", err)
+		return 64
+	}
+	toUnix, err := parseOptionalDate(*to)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid --to:", err)
+		return 64
+	}
+	issueUnix, err := parseOptionalDate(*issueDate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid --issue-date:", err)
+		return 64
+	}
+
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	var reply rpcapi.InvoiceGenerateReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceGenerate", rpcapi.InvoiceGenerateArgs{
+		CompanyName:   company,
+		FromUnix:      fromUnix,
+		ToUnix:        toUnix,
+		IssueDateUnix: issueUnix,
+		Note:          *note,
+		DryRun:        *dryRun,
+		AllowEmpty:    *allowEmpty,
+	}, &reply); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tag := ""
+	if *dryRun {
+		tag = " (dry-run)"
+	}
+	fmt.Printf("Generated %s%s — %s\n", reply.Number, tag, reply.PDFPath)
+	if err := exec.Command("open", reply.PDFPath).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "(warning: could not open viewer:", err, ")")
+	}
+	return 0
+}
+
+func invoiceShowSenders(args []string) int {
+	_ = args
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	cfgPath := filepath.Join(home, ".antitimely", "config.yaml")
+	if env := os.Getenv("ANTITIMELY_CONFIG"); env != "" {
+		cfgPath = env
+	}
+	cfg, err := invoice.LoadSendersConfig(cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	issues := cfg.Validate()
+	fmt.Printf("Config: %s\n\n", cfgPath)
+	for key, s := range cfg.Senders {
+		fmt.Printf("[%s] %s\n  %s %s\n  %s\n  Invoice cursor (config seed): %s%0*d\n",
+			key, s.LegalName, s.TaxIDLabel, s.TaxID,
+			strings.Join(s.AddressLines, ", "),
+			s.Invoice.NumberPrefix, s.Invoice.NumberPad, s.Invoice.NextNumber)
+		for ccy, bk := range s.BankAccounts {
+			extra := ""
+			if len(bk.AlsoAccepts) > 0 {
+				extra = " (also accepts: " + strings.Join(bk.AlsoAccepts, ", ") + ")"
+			}
+			fmt.Printf("  Bank for %s%s: %d field(s)\n", ccy, extra, len(bk.Fields))
+		}
+		fmt.Println()
+	}
+	if len(issues) > 0 {
+		fmt.Println("Issues:")
+		for _, iss := range issues {
+			fmt.Println("  -", iss)
+		}
+		return 1
+	}
+	fmt.Println("Config OK.")
+	return 0
+}
+
+func parseOptionalDate(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", s, time.Local)
+	if err != nil {
+		return 0, err
+	}
+	return t.Unix(), nil
 }
