@@ -147,3 +147,23 @@ func TestRenderPDF_TotalsBlock(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderPDF_BankBlock(t *testing.T) {
+	doc := sampleDoc()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatal(err)
+	}
+	text := extractPDFText(t, out)
+	for _, w := range []string{
+		"Ways to pay", "Local bank details", "Wise EUR",
+		"Reference", "INV-014",
+		"Account holder", "BIC", "TRWIBEB1XXX",
+		"IBAN", "BE16 9052 8808 7074",
+	} {
+		if !strings.Contains(text, w) {
+			t.Errorf("PDF text missing %q", w)
+		}
+	}
+}

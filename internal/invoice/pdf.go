@@ -147,6 +147,38 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 	}
 	m.AddRows(row.New(6)) // spacer
 
+	// "Ways to pay" section.
+	m.AddRow(5, col.New(12).Add(
+		text.New("Ways to pay", props.Text{Size: 11, Style: fontstyle.Bold}),
+	))
+	m.AddRow(4, col.New(12).Add(
+		text.New(doc.Bank.Title, props.Text{Size: 9, Style: fontstyle.Bold}),
+	))
+	if doc.Bank.Subtitle != "" {
+		m.AddRow(4, col.New(12).Add(
+			text.New(doc.Bank.Subtitle, props.Text{Size: 8, Color: gray}),
+		))
+	}
+	m.AddRows(row.New(2)) // spacer
+
+	// Reference is always the invoice number — auto-prepended.
+	fields := append([]BankField{{Label: "Reference", Value: doc.Number}}, doc.Bank.Fields...)
+	for _, f := range fields {
+		// Value can be multi-line; render each line on its own row with the
+		// label only on the first line.
+		valueLines := splitLines(f.Value)
+		for i, vl := range valueLines {
+			label := ""
+			if i == 0 {
+				label = f.Label
+			}
+			m.AddRow(4,
+				col.New(3).Add(text.New(label, props.Text{Size: 8, Color: gray})),
+				col.New(9).Add(text.New(vl, props.Text{Size: 9})),
+			)
+		}
+	}
+
 	return generateAndSave(m, outPath)
 }
 
@@ -159,4 +191,18 @@ func generateAndSave(m core.Maroto, outPath string) error {
 		return fmt.Errorf("save pdf: %w", err)
 	}
 	return nil
+}
+
+// splitLines splits s on '\n'. Returns at least one element (possibly empty
+// string) so the renderer always has something to draw.
+func splitLines(s string) []string {
+	out := []string{""}
+	for _, r := range s {
+		if r == '\n' {
+			out = append(out, "")
+			continue
+		}
+		out[len(out)-1] += string(r)
+	}
+	return out
 }
