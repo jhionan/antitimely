@@ -570,9 +570,10 @@ func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
 }
 
 // Agent CPU activity in a paused project's directory should auto-resume the
-// project (flip the DB flag + clear the in-memory pause entry) and let the
-// current tick land. Focus signals don't get this treatment — see the
-// companion test below.
+// project (flip the DB flag + clear the in-memory pause entry), arm it, and
+// drop the current tick. The tick is dropped because the project is armed on
+// resume — the agent must wait for a focus disarm before ticks land again.
+// Focus signals don't get auto-resume treatment — see the companion test below.
 func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 	p, br, cache, db := newTestPipeline(t)
 	defer db.Close()
@@ -593,6 +594,7 @@ func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 		AllowedBinaries:  map[string]bool{"claude": true},
 		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwd}},
 		PausedProjectIDs: map[int64]bool{projID: true},
+		ArmedProjects:    map[int64]bool{},
 	})
 	br.IdleSecondsVal = 200 // user idle — agent signals still fire
 	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
@@ -602,10 +604,11 @@ func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 
+	// Auto-resume arms the project and drops the tick — 0 ticks on resume tick.
 	var n int
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
-	if n != 1 {
-		t.Errorf("auto-resume should let one tick land; got %d", n)
+	if n != 0 {
+		t.Errorf("auto-resume should drop the resume tick (armed); got %d ticks", n)
 	}
 
 	// DB-level pause flag flipped.
@@ -619,6 +622,11 @@ func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 	// project as paused.
 	if cache.Snapshot().PausedProjectIDs[projID] {
 		t.Errorf("cache snapshot should no longer flag project as paused")
+	}
+
+	// Project is armed so agent ticks wait for a focus disarm.
+	if !cache.Snapshot().ArmedProjects[projID] {
+		t.Errorf("auto-resumed project should be armed; got %v", cache.Snapshot().ArmedProjects)
 	}
 }
 
@@ -832,6 +840,64 @@ func TestPipeline_AgentSignal_Unarmed_CountsNormally(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_id=?`, projID).Scan(&n)
 	if n != 1 {
 		t.Errorf("expected 1 tick for unarmed project, got %d", n)
+	}
+}
+
+func TestPipeline_AutoResume_ArmsAndDropsCurrentTick(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "paused-arm", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	if err := q.SetProjectPaused(ctx, store.SetProjectPausedParams{Paused: 1, Name: "paused-arm"}); err != nil {
+		t.Fatalf("SetProjectPaused: %v", err)
+	}
+
+	bin := "claude"
+	cwdPrefix := "/Users/rian/work/paused-arm"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:   map[string]bool{},
+		AllowedBinaries:  map[string]bool{bin: true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix}},
+		CwdPrefixes:      []string{cwdPrefix},
+		PausedProjectIDs: map[int64]bool{projID: true},
+		ArmedProjects:    map[int64]bool{},
+	})
+	br.IdleSecondsVal = 200
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
+
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick #1: %v", err)
+	}
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	if err := p.RunTick(ctx, 1005); err != nil {
+		t.Fatalf("RunTick #2: %v", err)
+	}
+
+	// Project should be unpaused in DB.
+	var paused int
+	db.QueryRow(`SELECT paused FROM projects WHERE id=?`, projID).Scan(&paused)
+	if paused != 0 {
+		t.Errorf("expected project auto-resumed (paused=0), got %d", paused)
+	}
+	// And in cache.
+	if cache.Snapshot().PausedProjectIDs[projID] {
+		t.Errorf("expected project not in PausedProjectIDs after auto-resume")
+	}
+	// But armed.
+	if !cache.Snapshot().ArmedProjects[projID] {
+		t.Errorf("auto-resumed project should be armed, got %v", cache.Snapshot().ArmedProjects)
+	}
+	// And no agent tick for this round.
+	var nTicks int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_id=?`, projID).Scan(&nTicks)
+	if nTicks != 0 {
+		t.Errorf("expected 0 ticks (gate drops auto-resumed agent signal), got %d", nTicks)
 	}
 }
 
