@@ -1,8 +1,13 @@
 -- A company groups projects.
 CREATE TABLE IF NOT EXISTS companies (
-    id          INTEGER PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,
-    created_at  INTEGER NOT NULL
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    created_at    INTEGER NOT NULL,
+    billing_mode  TEXT NOT NULL DEFAULT 'none'
+                  CHECK (billing_mode IN ('none','hourly','monthly_fixed')),
+    currency      TEXT,
+    rate_cents    INTEGER,
+    billed_from   TEXT
 ) STRICT;
 
 -- A project = a billable bucket.
@@ -70,10 +75,24 @@ CREATE INDEX IF NOT EXISTS idx_ticks_project_ts ON ticks(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_ticks_unassigned ON ticks(observation_id) WHERE project_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS invoices (
-    id          INTEGER PRIMARY KEY,
-    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    sent_at     INTEGER NOT NULL,
-    note        TEXT NOT NULL DEFAULT '',
-    created_at  INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY,
+    company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    sent_at      INTEGER NOT NULL,
+    note         TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    number       TEXT,
+    pdf_path     TEXT,
+    total_cents  INTEGER,
+    currency     TEXT,
+    sender_key   TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_invoices_company_sent ON invoices(company_id, sent_at DESC);
+
+-- Per-sender invoice number cursor. Seed value comes from config the first
+-- time a sender_key is used; subsequent allocations increment the row in this
+-- table. Tax authorities require gapless numbering per legal entity, so we
+-- never reset the counter or pull from MAX(invoices.number).
+CREATE TABLE IF NOT EXISTS sender_state (
+    sender_key            TEXT PRIMARY KEY,
+    next_invoice_number   INTEGER NOT NULL
+) STRICT;
