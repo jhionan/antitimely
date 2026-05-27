@@ -144,3 +144,36 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestBankFor_DirectMatch(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	br := cfg.Senders["br"]
+	bank, ok := br.BankFor("EUR")
+	if !ok {
+		t.Fatal("EUR not found on br")
+	}
+	if len(bank.Fields) == 0 || bank.Fields[0].Label != "IBAN" {
+		t.Errorf("unexpected bank: %+v", bank)
+	}
+}
+
+func TestBankFor_AlsoAcceptsFallback(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	es := cfg.Senders["es"]
+	// es has only EUR but EUR.also_accepts=[CAD] → lookup for CAD finds EUR.
+	bank, ok := es.BankFor("CAD")
+	if !ok {
+		t.Fatal("CAD not found on es via also_accepts")
+	}
+	if len(bank.AlsoAccepts) != 1 || bank.AlsoAccepts[0] != "CAD" {
+		t.Errorf("found wrong bank: %+v", bank)
+	}
+}
+
+func TestBankFor_NoMatch(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	br := cfg.Senders["br"]
+	if _, ok := br.BankFor("USD"); ok {
+		t.Error("USD should not match anything on br")
+	}
+}

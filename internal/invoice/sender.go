@@ -102,3 +102,20 @@ func (c *SendersConfig) Validate() []string {
 	}
 	return issues
 }
+
+// BankFor returns the bank account block to display for the given currency.
+// Tries an exact key match first; falls back to any block whose AlsoAccepts
+// list contains the currency. Returns (zero, false) if neither matches.
+func (s Sender) BankFor(currency string) (Bank, bool) {
+	if b, ok := s.BankAccounts[currency]; ok {
+		return b, true
+	}
+	for _, b := range s.BankAccounts {
+		for _, alt := range b.AlsoAccepts {
+			if alt == currency {
+				return b, true
+			}
+		}
+	}
+	return Bank{}, false
+}
