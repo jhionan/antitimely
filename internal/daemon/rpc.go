@@ -932,10 +932,31 @@ func (s *AntitimelyService) InvoiceDelete(args rpcapi.InvoiceDeleteArgs, reply *
 	return s.Q.DeleteInvoice(ctx, args.ID)
 }
 
+// SetCompanyBilling updates a company's billing configuration.
+func (s *AntitimelyService) SetCompanyBilling(args rpcapi.SetCompanyBillingArgs, reply *rpcapi.SetCompanyBillingReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	return s.Q.SetCompanyBilling(ctx, store.SetCompanyBillingParams{
+		Name:        args.Name,
+		BillingMode: args.BillingMode,
+		Currency:    nullStr(args.Currency),
+		RateCents:   nullInt(args.RateCents),
+		BilledFrom:  nullStr(args.BilledFrom),
+	})
+}
+
 // nullStr converts a non-empty string to a valid NullString; empty -> invalid.
 func nullStr(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// nullInt returns sql.NullInt64 with Valid=true iff n != 0.
+func nullInt(n int64) sql.NullInt64 {
+	if n == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: n, Valid: true}
 }

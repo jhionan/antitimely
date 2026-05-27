@@ -65,7 +65,9 @@ Usage:
   antitimely status
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
   antitimely company  add <name>  |  list  |  delete <name>
-  antitimely invoice  send [--at=YYYY-MM-DD] [--note=...] <company>  |  list [<company>]  |  delete <id>
+  antitimely invoice  generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--dry-run] [--allow-empty]
+                      send [--at=YYYY-MM-DD] [--note=...] <company>   (anchor only, no PDF — kept for back-compat)
+                      list [<company>]  |  delete <id>  |  show-senders
   antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]  |  pause <name>  |  resume <name>  |  pause-all  |  resume-all
   antitimely end-day                  shortcut for 'project pause-all' (use to stop all tracking at end of day)
   antitimely start-day                shortcut for 'project resume-all' (use to resume tracking at start of day)

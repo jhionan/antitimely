@@ -9,9 +9,13 @@ import (
 )
 
 type Company struct {
-	ID        int64
-	Name      string
-	CreatedAt int64
+	ID          int64
+	Name        string
+	CreatedAt   int64
+	BillingMode string
+	Currency    sql.NullString
+	RateCents   sql.NullInt64
+	BilledFrom  sql.NullString
 }
 
 type IgnoredObservation struct {
@@ -20,11 +24,16 @@ type IgnoredObservation struct {
 }
 
 type Invoice struct {
-	ID        int64
-	CompanyID int64
-	SentAt    int64
-	Note      string
-	CreatedAt int64
+	ID         int64
+	CompanyID  int64
+	SentAt     int64
+	Note       string
+	CreatedAt  int64
+	Number     sql.NullString
+	PdfPath    sql.NullString
+	TotalCents sql.NullInt64
+	Currency   sql.NullString
+	SenderKey  sql.NullString
 }
 
 type Observation struct {
@@ -54,6 +63,11 @@ type Rule struct {
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
 	CreatedAt        int64
+}
+
+type SenderState struct {
+	SenderKey         string
+	NextInvoiceNumber int64
 }
 
 type Tick struct {

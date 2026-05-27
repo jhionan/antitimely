@@ -82,3 +82,98 @@ func TestLoadSendersConfig_ParsesValidFile(t *testing.T) {
 		t.Errorf("cfg.Invoice.LineItemLabel = %q", cfg.Invoice.LineItemLabel)
 	}
 }
+
+func TestValidate_HappyPath(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	issues := cfg.Validate()
+	if len(issues) != 0 {
+		t.Errorf("expected no issues, got %v", issues)
+	}
+}
+
+func TestValidate_DetectsMissingFields(t *testing.T) {
+	bad := `
+senders:
+  bad:
+    legal_name: ""
+    tax_id: ""
+    address_lines: []
+    invoice:
+      number_prefix: ""
+      number_pad: 0
+      next_number: 0
+    bank_accounts: {}
+invoice:
+  output_dir: ""
+`
+	cfg, err := LoadSendersConfig(writeYAML(t, bad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := cfg.Validate()
+	if len(issues) == 0 {
+		t.Fatal("expected issues, got none")
+	}
+	// Should report all of: legal_name, tax_id, address_lines, number_prefix,
+	// next_number, bank_accounts empty, output_dir empty.
+	wantSubstr := []string{"legal_name", "tax_id", "address_lines",
+		"number_prefix", "next_number", "bank_accounts", "output_dir"}
+	for _, want := range wantSubstr {
+		found := false
+		for _, iss := range issues {
+			if contains(iss, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no issue mentions %q; got %v", want, issues)
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && indexOf(s, sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestBankFor_DirectMatch(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	br := cfg.Senders["br"]
+	bank, ok := br.BankFor("EUR")
+	if !ok {
+		t.Fatal("EUR not found on br")
+	}
+	if len(bank.Fields) == 0 || bank.Fields[0].Label != "IBAN" {
+		t.Errorf("unexpected bank: %+v", bank)
+	}
+}
+
+func TestBankFor_AlsoAcceptsFallback(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	es := cfg.Senders["es"]
+	// es has only EUR but EUR.also_accepts=[CAD] → lookup for CAD finds EUR.
+	bank, ok := es.BankFor("CAD")
+	if !ok {
+		t.Fatal("CAD not found on es via also_accepts")
+	}
+	if len(bank.AlsoAccepts) != 1 || bank.AlsoAccepts[0] != "CAD" {
+		t.Errorf("found wrong bank: %+v", bank)
+	}
+}
+
+func TestBankFor_NoMatch(t *testing.T) {
+	cfg, _ := LoadSendersConfig(writeYAML(t, validSenderYAML))
+	br := cfg.Senders["br"]
+	if _, ok := br.BankFor("USD"); ok {
+		t.Error("USD should not match anything on br")
+	}
+}

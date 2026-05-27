@@ -64,6 +64,27 @@ type InvoiceEntry struct {
 type InvoiceDeleteArgs struct{ ID int64 }
 type InvoiceDeleteReply struct{}
 
+type InvoiceGenerateArgs struct {
+	CompanyName   string
+	FromUnix      int64 // 0 = use default period for the company's billing_mode
+	ToUnix        int64 // 0 = use default
+	IssueDateUnix int64 // 0 = now
+	Note          string
+	DryRun        bool
+	AllowEmpty    bool
+}
+
+type InvoiceGenerateReply struct {
+	InvoiceID     int64 // 0 when DryRun=true
+	Number        string
+	PDFPath       string
+	TotalCents    int64
+	Currency      string
+	SenderKey     string
+	IssueDateUnix int64
+	DueDateUnix   int64
+}
+
 // --- Allowlist ---
 
 type WatchAddArgs struct {
@@ -226,3 +247,12 @@ type ProjectSetCompanyArgs struct {
 	CompanyName string // empty = unassign
 }
 type ProjectSetCompanyReply struct{}
+
+type SetCompanyBillingArgs struct {
+	Name        string
+	BillingMode string
+	Currency    string
+	RateCents   int64
+	BilledFrom  string
+}
+type SetCompanyBillingReply struct{}

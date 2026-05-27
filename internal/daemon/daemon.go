@@ -82,6 +82,24 @@ func Run(cfg Config, schemaSQL string) error {
 		}
 	}
 
+	// Idempotent column adds for older DBs that predate the invoice feature.
+	invoiceMigrations := []string{
+		"ALTER TABLE companies ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'none'",
+		"ALTER TABLE companies ADD COLUMN currency TEXT",
+		"ALTER TABLE companies ADD COLUMN rate_cents INTEGER",
+		"ALTER TABLE companies ADD COLUMN billed_from TEXT",
+		"ALTER TABLE invoices ADD COLUMN number TEXT",
+		"ALTER TABLE invoices ADD COLUMN pdf_path TEXT",
+		"ALTER TABLE invoices ADD COLUMN total_cents INTEGER",
+		"ALTER TABLE invoices ADD COLUMN currency TEXT",
+		"ALTER TABLE invoices ADD COLUMN sender_key TEXT",
+	}
+	for _, q := range invoiceMigrations {
+		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migrate %q: %w", q, err)
+		}
+	}
+
 	bridge := &macos.RealBridge{}
 	cache := NewCache()
 	pt := NewPermissionTracker()

@@ -190,3 +190,37 @@ GROUP BY p.id;
 SELECT COUNT(DISTINCT ts) AS tick_count
 FROM ticks
 WHERE project_id IS NOT NULL AND ts >= ? AND ts < ?;
+
+-- name: GetCompanyForInvoice :one
+SELECT id, name, created_at, billing_mode, currency, rate_cents, billed_from
+FROM companies WHERE name = ?;
+
+-- name: SetCompanyBilling :exec
+UPDATE companies
+SET billing_mode = ?, currency = ?, rate_cents = ?, billed_from = ?
+WHERE name = ?;
+
+-- name: LastInvoiceSentForCompany :one
+SELECT sent_at FROM invoices WHERE company_id = ? ORDER BY sent_at DESC LIMIT 1;
+
+-- name: CountTicksForCompanyInRange :one
+SELECT COUNT(*) FROM ticks t
+JOIN projects p ON p.id = t.project_id
+WHERE p.company_id = ? AND p.paused = 0
+  AND t.ts >= ? AND t.ts < ?;
+
+-- name: SeedSenderState :exec
+INSERT OR IGNORE INTO sender_state (sender_key, next_invoice_number) VALUES (?, ?);
+
+-- name: AllocateNextInvoiceNumber :one
+UPDATE sender_state
+SET next_invoice_number = next_invoice_number + 1
+WHERE sender_key = ?
+RETURNING next_invoice_number - 1 AS allocated;
+
+-- name: InsertInvoiceFull :one
+INSERT INTO invoices (
+    company_id, sent_at, note, created_at,
+    number, pdf_path, total_cents, currency, sender_key
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id;
