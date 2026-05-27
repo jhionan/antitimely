@@ -2,10 +2,12 @@ package invoice
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/johnfercher/maroto/v2"
 	"github.com/johnfercher/maroto/v2/pkg/components/col"
+	"github.com/johnfercher/maroto/v2/pkg/components/image"
 	"github.com/johnfercher/maroto/v2/pkg/components/row"
 	"github.com/johnfercher/maroto/v2/pkg/components/text"
 	"github.com/johnfercher/maroto/v2/pkg/config"
@@ -18,6 +20,9 @@ import (
 // gray is a grey color suitable for secondary text (labels).
 var gray = &props.Color{Red: 128, Green: 128, Blue: 128}
 
+// osStat is an indirection over os.Stat so tests can inject a mock.
+var osStat = os.Stat
+
 // RenderPDF writes the invoice document to outPath. Caller owns the path
 // (mkdir parents beforehand). Overwrites any existing file at outPath.
 func RenderPDF(doc InvoiceDoc, outPath string) error {
@@ -28,14 +33,20 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 		Build()
 	m := maroto.New(cfg)
 
-	// Header: "Invoice" big title, with number + issue date on the right.
+	// Header: optional logo + "Invoice" big, with number + issue date on the right.
+	logoCol := col.New(1)
+	titleCol := col.New(5)
+	if doc.LogoPath != "" {
+		if _, err := osStat(doc.LogoPath); err == nil {
+			logoCol = col.New(1).Add(
+				image.NewFromFile(doc.LogoPath, props.Rect{Center: true, Percent: 100}),
+			)
+		}
+	}
+	titleCol = titleCol.Add(text.New("Invoice", props.Text{Size: 24, Style: fontstyle.Bold}))
 	m.AddRow(20,
-		col.New(6).Add(
-			text.New("Invoice", props.Text{
-				Size:  24,
-				Style: fontstyle.Bold,
-			}),
-		),
+		logoCol,
+		titleCol,
 		col.New(3).Add(
 			text.New("Invoice number", props.Text{Size: 8, Color: gray}),
 			text.New(doc.Number, props.Text{Size: 10, Top: 4}),

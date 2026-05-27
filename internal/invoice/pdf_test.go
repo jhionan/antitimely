@@ -167,3 +167,30 @@ func TestRenderPDF_BankBlock(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderPDF_NoLogo_RendersCleanly(t *testing.T) {
+	doc := sampleDoc()
+	doc.LogoPath = ""
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatalf("RenderPDF without logo: %v", err)
+	}
+	info, _ := os.Stat(out)
+	if info == nil || info.Size() == 0 {
+		t.Error("output missing")
+	}
+}
+
+func TestRenderPDF_LogoMissingFile_IsIgnored(t *testing.T) {
+	doc := sampleDoc()
+	doc.LogoPath = "/does/not/exist.png"
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.pdf")
+	// Renderer must NOT fail when the logo file is missing — it should
+	// silently render without one. This is the spec's "missing-file → skip"
+	// rule for logo_path.
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatalf("RenderPDF with missing logo: %v", err)
+	}
+}
