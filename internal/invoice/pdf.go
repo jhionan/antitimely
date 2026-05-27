@@ -51,6 +51,42 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 		text.New(strings.Repeat("_", 120), props.Text{Size: 6, Color: gray, Align: align.Left}),
 	))
 
+	// Billed-to / Issued-by two-column block.
+	m.AddRow(6,
+		col.New(6).Add(
+			text.New("Billed to", props.Text{Size: 9, Style: fontstyle.Bold}),
+		),
+		col.New(6).Add(
+			text.New("Issued by", props.Text{Size: 9, Style: fontstyle.Bold}),
+		),
+	)
+	taxLine := doc.Sender.TaxIDLabel
+	if taxLine != "" {
+		taxLine = taxLine + " " + doc.Sender.TaxID
+	} else {
+		taxLine = doc.Sender.TaxID
+	}
+	addressLines := append([]string{doc.Sender.LegalName, taxLine}, doc.Sender.AddressLines...)
+	clientLines := []string{doc.ClientName}
+	maxLines := len(addressLines)
+	if len(clientLines) > maxLines {
+		maxLines = len(clientLines)
+	}
+	for i := 0; i < maxLines; i++ {
+		var left, right string
+		if i < len(clientLines) {
+			left = clientLines[i]
+		}
+		if i < len(addressLines) {
+			right = addressLines[i]
+		}
+		m.AddRow(4,
+			col.New(6).Add(text.New(left, props.Text{Size: 9})),
+			col.New(6).Add(text.New(right, props.Text{Size: 9})),
+		)
+	}
+	m.AddRows(row.New(4)) // spacer
+
 	return generateAndSave(m, outPath)
 }
 

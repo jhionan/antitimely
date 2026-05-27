@@ -69,6 +69,27 @@ func extractPDFText(t *testing.T, path string) string {
 	return b.String()
 }
 
+func TestRenderPDF_BilledTo_IssuedBy(t *testing.T) {
+	doc := sampleDoc()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatal(err)
+	}
+	text := extractPDFText(t, out)
+	want := []string{
+		"Billed to", "Dentix",
+		"Issued by", "JHIONAN RIAN LARA DOS SANTOS",
+		"CNPJ 34.012.215/0001-44",
+		"Mateus Leme 2830", "curitiba", "Brazil",
+	}
+	for _, w := range want {
+		if !strings.Contains(text, w) {
+			t.Errorf("PDF text missing %q\n---\n%s\n---", w, text)
+		}
+	}
+}
+
 func TestRenderPDF_HeaderHasInvoiceTitleAndNumber(t *testing.T) {
 	doc := sampleDoc()
 	dir := t.TempDir()
