@@ -87,6 +87,40 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 	}
 	m.AddRows(row.New(4)) // spacer
 
+	// Line items table — header row.
+	m.AddRow(6,
+		col.New(5).Add(text.New("Product or service", props.Text{Size: 9, Style: fontstyle.Bold})),
+		col.New(1).Add(text.New("Qty", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right})),
+		col.New(2).Add(text.New("Unit price", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right})),
+		col.New(1).Add(text.New("Tax", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right})),
+		col.New(3).Add(text.New("Total", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right})),
+	)
+	// Divider.
+	m.AddRow(2, col.New(12).Add(
+		text.New(strings.Repeat("_", 120), props.Text{Size: 6, Color: gray}),
+	))
+
+	// One row: the aggregated line item.
+	qtyStr := FormatHours(doc.LineItem.QuantityHoursTimes100)
+	unitStr := FormatMoney(doc.LineItem.UnitCents, doc.Currency)
+	totalStr := FormatMoney(doc.LineItem.TotalCents, doc.Currency)
+	// Period: from inclusive, to exclusive — show "from – (to-1day)" so the
+	// reader sees the actual last day worked.
+	periodStr := FormatDate(doc.PeriodFrom) + " – " + FormatDate(doc.PeriodTo.AddDate(0, 0, -1))
+
+	m.AddRow(5,
+		col.New(5).Add(text.New(doc.LineItemLabel, props.Text{Size: 9})),
+		col.New(1).Add(text.New(qtyStr, props.Text{Size: 9, Align: align.Right})),
+		col.New(2).Add(text.New(unitStr, props.Text{Size: 9, Align: align.Right})),
+		col.New(1).Add(text.New("—", props.Text{Size: 9, Align: align.Right})),
+		col.New(3).Add(text.New(totalStr, props.Text{Size: 9, Align: align.Right})),
+	)
+	m.AddRow(4,
+		col.New(5).Add(text.New(periodStr, props.Text{Size: 7, Color: gray})),
+		col.New(7),
+	)
+	m.AddRows(row.New(4)) // spacer
+
 	return generateAndSave(m, outPath)
 }
 

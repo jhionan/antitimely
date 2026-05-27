@@ -108,3 +108,23 @@ func TestRenderPDF_HeaderHasInvoiceTitleAndNumber(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderPDF_LineItemsTable(t *testing.T) {
+	doc := sampleDoc()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatal(err)
+	}
+	text := extractPDFText(t, out)
+	for _, w := range []string{
+		"Product or service", "Qty", "Unit price", "Tax", "Total",
+		"Software development",
+		"1",            // monthly_fixed quantity (FormatHours(100) = "1")
+		"3,000.00 EUR", // unit + total
+	} {
+		if !strings.Contains(text, w) {
+			t.Errorf("PDF text missing %q\n---\n%s\n---", w, text)
+		}
+	}
+}
