@@ -48,6 +48,36 @@ func TestCache_InitialArmedProjectsEmpty(t *testing.T) {
 	}
 }
 
+func TestCache_ArmProject(t *testing.T) {
+	c := NewCache()
+	c.ArmProject(42)
+	if !c.Snapshot().ArmedProjects[42] {
+		t.Errorf("expected project 42 armed, got %v", c.Snapshot().ArmedProjects)
+	}
+}
+
+func TestCache_ArmProject_Idempotent(t *testing.T) {
+	c := NewCache()
+	c.ArmProject(7)
+	c.ArmProject(7)
+	got := c.Snapshot().ArmedProjects
+	if !got[7] || len(got) != 1 {
+		t.Errorf("expected exactly {7:true}, got %v", got)
+	}
+}
+
+func TestCache_ArmProject_DoesNotClobberOthers(t *testing.T) {
+	c := NewCache()
+	c.ArmAllProjects([]int64{1, 2})
+	c.ArmProject(3)
+	got := c.Snapshot().ArmedProjects
+	for _, id := range []int64{1, 2, 3} {
+		if !got[id] {
+			t.Errorf("expected project %d armed, got %v", id, got)
+		}
+	}
+}
+
 func strPtrLocal(s string) *string { return &s }
 
 func TestCache_ArmAllProjects(t *testing.T) {

@@ -89,3 +89,22 @@ func (c *Cache) ArmAllProjects(ids []int64) {
 		}
 	}
 }
+
+// ArmProject atomically sets ArmedProjects[id]=true. Idempotent.
+func (c *Cache) ArmProject(id int64) {
+	for {
+		cur := c.ptr.Load()
+		if cur.ArmedProjects[id] {
+			return
+		}
+		next := *cur
+		next.ArmedProjects = make(map[int64]bool, len(cur.ArmedProjects)+1)
+		for k, v := range cur.ArmedProjects {
+			next.ArmedProjects[k] = v
+		}
+		next.ArmedProjects[id] = true
+		if c.ptr.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
