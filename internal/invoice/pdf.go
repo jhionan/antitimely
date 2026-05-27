@@ -121,6 +121,32 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 	)
 	m.AddRows(row.New(4)) // spacer
 
+	// Totals block — right-aligned, 4 lines (right-aligned columns 9 + 10-12).
+	total := FormatMoney(doc.LineItem.TotalCents, doc.Currency)
+	zero := FormatMoney(0, doc.Currency)
+	totalLines := []struct {
+		Label string
+		Value string
+		Bold  bool
+	}{
+		{"Total excluding tax", total, false},
+		{"Total tax", zero, false},
+		{"Amount Due", total, true},
+		{"Due by", FormatDate(doc.DueDate), false},
+	}
+	for _, tl := range totalLines {
+		style := fontstyle.Type("")
+		if tl.Bold {
+			style = fontstyle.Bold
+		}
+		m.AddRow(4,
+			col.New(6),
+			col.New(3).Add(text.New(tl.Label, props.Text{Size: 9, Style: style, Align: align.Right})),
+			col.New(3).Add(text.New(tl.Value, props.Text{Size: 9, Style: style, Align: align.Right})),
+		)
+	}
+	m.AddRows(row.New(6)) // spacer
+
 	return generateAndSave(m, outPath)
 }
 

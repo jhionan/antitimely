@@ -128,3 +128,22 @@ func TestRenderPDF_LineItemsTable(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderPDF_TotalsBlock(t *testing.T) {
+	doc := sampleDoc()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatal(err)
+	}
+	text := extractPDFText(t, out)
+	for _, w := range []string{
+		"Total excluding tax", "Total tax", "0.00 EUR",
+		"Amount Due", "3,000.00 EUR",
+		"Due by", "May 27, 2026",
+	} {
+		if !strings.Contains(text, w) {
+			t.Errorf("PDF text missing %q", w)
+		}
+	}
+}
