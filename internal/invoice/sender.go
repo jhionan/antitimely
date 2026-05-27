@@ -64,3 +64,41 @@ func LoadSendersConfig(path string) (*SendersConfig, error) {
 	}
 	return &c, nil
 }
+
+// Validate returns a list of human-readable issues found in the config.
+// Empty slice = config is good to use.
+func (c *SendersConfig) Validate() []string {
+	var issues []string
+	if c.Invoice.OutputDir == "" {
+		issues = append(issues, "invoice.output_dir is empty")
+	}
+	if c.Invoice.LineItemLabel == "" {
+		issues = append(issues, "invoice.line_item_label is empty")
+	}
+	for key, s := range c.Senders {
+		if s.LegalName == "" {
+			issues = append(issues, fmt.Sprintf("senders.%s.legal_name is empty", key))
+		}
+		if s.TaxID == "" {
+			issues = append(issues, fmt.Sprintf("senders.%s.tax_id is empty", key))
+		}
+		if len(s.AddressLines) == 0 {
+			issues = append(issues, fmt.Sprintf("senders.%s.address_lines is empty", key))
+		}
+		if s.Invoice.NumberPrefix == "" {
+			issues = append(issues, fmt.Sprintf("senders.%s.invoice.number_prefix is empty", key))
+		}
+		if s.Invoice.NextNumber < 1 {
+			issues = append(issues, fmt.Sprintf("senders.%s.invoice.next_number must be >= 1", key))
+		}
+		if len(s.BankAccounts) == 0 {
+			issues = append(issues, fmt.Sprintf("senders.%s.bank_accounts has no entries", key))
+		}
+		for ccy, bank := range s.BankAccounts {
+			if len(bank.Fields) == 0 {
+				issues = append(issues, fmt.Sprintf("senders.%s.bank_accounts.%s.fields is empty", key, ccy))
+			}
+		}
+	}
+	return issues
+}
