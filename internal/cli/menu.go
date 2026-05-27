@@ -36,6 +36,8 @@ func RunMenu() int {
 		fmt.Println("  [7] Rules")
 		fmt.Println("  [8] Config (init / show)")
 		fmt.Println("  [9] Reset (wipe data)")
+		fmt.Println("  [E] End day (pause all projects)")
+		fmt.Println("  [R] Resume all projects")
 		fmt.Println("  [h] Help (full CLI usage)")
 		fmt.Println("  [q] Quit")
 		fmt.Print("\nChoice: ")
@@ -66,6 +68,10 @@ func RunMenu() int {
 			configMenu(stdin)
 		case "9":
 			resetMenu(stdin)
+		case "E", "e":
+			projectPauseAll()
+		case "R", "r":
+			projectResumeAll()
 		case "h", "help":
 			printUsage(os.Stdout)
 		case "q", "Q", "":
@@ -138,6 +144,8 @@ func projectMenu(stdin *bufio.Scanner) {
 		fmt.Println("  [4] Assign company to project")
 		fmt.Println("  [5] Pause project")
 		fmt.Println("  [6] Resume project")
+		fmt.Println("  [7] Pause all projects")
+		fmt.Println("  [8] Resume all projects")
 		fmt.Println("  [b] Back")
 		choice, ok := promptLine(stdin, "Choice: ")
 		if !ok {
@@ -186,6 +194,10 @@ func projectMenu(stdin *bufio.Scanner) {
 				continue
 			}
 			projectResume([]string{name})
+		case "7":
+			projectPauseAll()
+		case "8":
+			projectResumeAll()
 		case "b", "":
 			return
 		default:

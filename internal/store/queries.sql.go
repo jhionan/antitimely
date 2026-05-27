@@ -716,6 +716,18 @@ func (q *Queries) ListWatchedPrograms(ctx context.Context) ([]ListWatchedProgram
 	return items, nil
 }
 
+const pauseAllProjects = `-- name: PauseAllProjects :execrows
+UPDATE projects SET paused = 1
+`
+
+func (q *Queries) PauseAllProjects(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pauseAllProjects)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const pendingReviewSignatures = `-- name: PendingReviewSignatures :many
 SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd,
        COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
@@ -782,6 +794,27 @@ type RemoveWatchedProgramParams struct {
 
 func (q *Queries) RemoveWatchedProgram(ctx context.Context, arg RemoveWatchedProgramParams) error {
 	_, err := q.db.ExecContext(ctx, removeWatchedProgram, arg.Kind, arg.Identifier)
+	return err
+}
+
+const resumeAllProjects = `-- name: ResumeAllProjects :execrows
+UPDATE projects SET paused = 0
+`
+
+func (q *Queries) ResumeAllProjects(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resumeAllProjects)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const resumeProjectByID = `-- name: ResumeProjectByID :exec
+UPDATE projects SET paused = 0 WHERE id = ?
+`
+
+func (q *Queries) ResumeProjectByID(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, resumeProjectByID, id)
 	return err
 }
 

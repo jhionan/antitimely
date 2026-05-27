@@ -140,6 +140,15 @@ SELECT id FROM projects WHERE paused = 1;
 -- name: SetProjectPaused :exec
 UPDATE projects SET paused = ? WHERE name = ?;
 
+-- name: ResumeProjectByID :exec
+UPDATE projects SET paused = 0 WHERE id = ?;
+
+-- name: PauseAllProjects :execrows
+UPDATE projects SET paused = 1;
+
+-- name: ResumeAllProjects :execrows
+UPDATE projects SET paused = 0;
+
 -- name: AddInvoice :one
 INSERT INTO invoices (company_id, sent_at, note, created_at) VALUES (?, ?, ?, ?) RETURNING id;
 

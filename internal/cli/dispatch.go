@@ -28,6 +28,10 @@ func Dispatch(args []string) int {
 		return cmdInvoice(args[1:])
 	case "project":
 		return cmdProject(args[1:])
+	case "end-day":
+		return projectPauseAll()
+	case "start-day":
+		return projectResumeAll()
 	case "review":
 		return cmdReview(args[1:])
 	case "rules":
@@ -62,7 +66,9 @@ Usage:
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
   antitimely company  add <name>  |  list  |  delete <name>
   antitimely invoice  send [--at=YYYY-MM-DD] [--note=...] <company>  |  list [<company>]  |  delete <id>
-  antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]  |  pause <name>  |  resume <name>
+  antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]  |  pause <name>  |  resume <name>  |  pause-all  |  resume-all
+  antitimely end-day                  shortcut for 'project pause-all' (use to stop all tracking at end of day)
+  antitimely start-day                shortcut for 'project resume-all' (use to resume tracking at start of day)
   antitimely review
   antitimely rules    list  |  delete <id>
   antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]

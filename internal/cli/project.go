@@ -10,7 +10,7 @@ import (
 
 func cmdProject(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely project <add|list|delete|set-company|pause|resume> ...")
+		fmt.Fprintln(os.Stderr, "usage: antitimely project <add|list|delete|set-company|pause|resume|pause-all|resume-all> ...")
 		return 64
 	}
 	switch args[0] {
@@ -26,6 +26,10 @@ func cmdProject(args []string) int {
 		return projectPause(args[1:])
 	case "resume":
 		return projectResume(args[1:])
+	case "pause-all":
+		return projectPauseAll()
+	case "resume-all":
+		return projectResumeAll()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: project %s\n", args[0])
 		return 64
@@ -177,5 +181,37 @@ func projectResume(args []string) int {
 		return 1
 	}
 	fmt.Printf("Resumed project %q\n", args[0])
+	return 0
+}
+
+func projectPauseAll() int {
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	var reply rpcapi.ProjectPauseAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectPauseAll",
+		rpcapi.ProjectPauseAllArgs{}, &reply); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Paused all projects (%d)\n", reply.Count)
+	return 0
+}
+
+func projectResumeAll() int {
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	var reply rpcapi.ProjectResumeAllReply
+	if err := client.Call(rpcapi.ServiceName+".ProjectResumeAll",
+		rpcapi.ProjectResumeAllArgs{}, &reply); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Resumed all projects (%d)\n", reply.Count)
 	return 0
 }
