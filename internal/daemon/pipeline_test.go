@@ -747,3 +747,142 @@ func TestPipeline_FocusSignal_DoesNotDisarmOtherProjects(t *testing.T) {
 		t.Errorf("expected beta still armed (focus was for alpha), got %v", got)
 	}
 }
+
+func TestPipeline_AgentSignal_Armed_DropsTick(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "gated", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	bin := "claude"
+	cwdPrefix := "/Users/rian/work/gated"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:   map[string]bool{},
+		AllowedBinaries:  map[string]bool{bin: true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix}},
+		CwdPrefixes:      []string{cwdPrefix},
+		PausedProjectIDs: map[int64]bool{},
+		ArmedProjects:    map[int64]bool{projID: true},
+	})
+	br.IdleSecondsVal = 200 // no focus signal possible
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
+
+	// First tick: establish prev CPU sample.
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick #1: %v", err)
+	}
+	// Second tick: CPU delta over threshold ⇒ agent signal would fire,
+	// but project is armed so the tick must be dropped.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	if err := p.RunTick(ctx, 1005); err != nil {
+		t.Fatalf("RunTick #2: %v", err)
+	}
+
+	var nTicks int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_id=?`, projID).Scan(&nTicks)
+	if nTicks != 0 {
+		t.Errorf("expected 0 ticks for armed project, got %d", nTicks)
+	}
+
+	var nObs int
+	db.QueryRow(`SELECT COUNT(*) FROM observations WHERE source='agent' AND binary_name=?`, bin).Scan(&nObs)
+	if nObs == 0 {
+		t.Errorf("expected observation row preserved (history), got %d", nObs)
+	}
+}
+
+func TestPipeline_AgentSignal_Unarmed_CountsNormally(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "open", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	bin := "claude"
+	cwdPrefix := "/Users/rian/work/open"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:   map[string]bool{},
+		AllowedBinaries:  map[string]bool{bin: true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix}},
+		CwdPrefixes:      []string{cwdPrefix},
+		PausedProjectIDs: map[int64]bool{},
+		ArmedProjects:    map[int64]bool{}, // NOT armed
+	})
+	br.IdleSecondsVal = 200
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
+
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick #1: %v", err)
+	}
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	if err := p.RunTick(ctx, 1005); err != nil {
+		t.Fatalf("RunTick #2: %v", err)
+	}
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_id=?`, projID).Scan(&n)
+	if n != 1 {
+		t.Errorf("expected 1 tick for unarmed project, got %d", n)
+	}
+}
+
+func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "armed-then-focused", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	bundle := "com.example.editor"
+	title := "armed-then-focused"
+	bin := "claude"
+	cwdPrefix := "/Users/rian/work/armed-then-focused"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:  map[string]bool{bundle: true},
+		AllowedBinaries: map[string]bool{bin: true},
+		Rules: []domain.RuleSpec{
+			{ID: 1, ProjectID: projID, Priority: 100, MatchBundleID: &bundle, MatchTitleSubstr: &title},
+			{ID: 2, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix},
+		},
+		CwdPrefixes:      []string{cwdPrefix},
+		PausedProjectIDs: map[int64]bool{},
+		ArmedProjects:    map[int64]bool{projID: true},
+	})
+	br.IdleSecondsVal = 5
+	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1234}
+	br.FocusedTitle = "armed-then-focused — main"
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
+
+	// Tick #1: focus disarms; agent has no prev CPU sample yet so no agent tick.
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick #1: %v", err)
+	}
+	// Tick #2: focus tick lands again (still disarmed), agent tick now also lands.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	if err := p.RunTick(ctx, 1005); err != nil {
+		t.Fatalf("RunTick #2: %v", err)
+	}
+
+	var nFocus, nAgent int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks t JOIN observations o ON o.id=t.observation_id WHERE t.project_id=? AND o.source='focus'`, projID).Scan(&nFocus)
+	db.QueryRow(`SELECT COUNT(*) FROM ticks t JOIN observations o ON o.id=t.observation_id WHERE t.project_id=? AND o.source='agent'`, projID).Scan(&nAgent)
+	if nFocus != 2 {
+		t.Errorf("expected 2 focus ticks, got %d", nFocus)
+	}
+	if nAgent != 1 {
+		t.Errorf("expected 1 agent tick after disarm, got %d", nAgent)
+	}
+}

@@ -147,6 +147,10 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			log.Printf("auto-resumed project %d: agent activity (binary=%q cwd=%q)", *pid, sig.BinaryName, sig.Cwd)
 		}
 
+		if sig.IsAgent() && pid != nil && snap.ArmedProjects[*pid] {
+			continue
+		}
+
 		var projectID sql.NullInt64
 		if pid != nil {
 			projectID = sql.NullInt64{Int64: *pid, Valid: true}
