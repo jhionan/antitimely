@@ -16,6 +16,7 @@
 # Editor
 .vscode/
 .idea/
+.claude/
 
 # Test artifacts
 coverage.out
