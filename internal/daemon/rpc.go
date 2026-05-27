@@ -196,6 +196,7 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 			BillableSeconds: billableTicks * tickSec,
 			TodaySeconds:    todayTicks * tickSec,
 			Paused:          isPaused,
+			Armed:           s.Cache.Snapshot().ArmedProjects[pr.ID],
 		}
 
 		if !pr.CompanyID.Valid {

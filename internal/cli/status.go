@@ -68,11 +68,16 @@ func cmdStatus(args []string) int {
 			if pr.Paused {
 				pausedNote = "  (paused)"
 			}
-			fmt.Printf("    %-36s %s   (today: %s)%s\n",
+			armedNote := ""
+			if pr.Armed {
+				armedNote = "  (armed: needs focus)"
+			}
+			fmt.Printf("    %-36s %s   (today: %s)%s%s\n",
 				pr.Name,
 				fmtDuration(pr.BillableSeconds),
 				fmtDuration(pr.TodaySeconds),
 				pausedNote,
+				armedNote,
 			)
 		}
 		fmt.Println()
@@ -89,11 +94,16 @@ func cmdStatus(args []string) int {
 			if pr.Paused {
 				pausedNote = "  (paused)"
 			}
-			fmt.Printf("    %-36s %s   (today: %s)%s\n",
+			armedNote := ""
+			if pr.Armed {
+				armedNote = "  (armed: needs focus)"
+			}
+			fmt.Printf("    %-36s %s   (today: %s)%s%s\n",
 				pr.Name,
 				fmtDuration(pr.BillableSeconds),
 				fmtDuration(pr.TodaySeconds),
 				pausedNote,
+				armedNote,
 			)
 		}
 		fmt.Println()

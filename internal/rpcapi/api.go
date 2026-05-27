@@ -38,6 +38,7 @@ type ProjectTotals struct {
 	BillableSeconds int64 // since company's last invoice (or all-time if no invoice)
 	TodaySeconds    int64
 	Paused          bool
+	Armed           bool
 }
 
 // --- Invoices ---
@@ -111,6 +112,12 @@ type ProjectPauseReply struct{}
 
 type ProjectResumeArgs struct{ Name string }
 type ProjectResumeReply struct{}
+
+type ProjectPauseAllArgs struct{}
+type ProjectPauseAllReply struct{ Count int64 }
+
+type ProjectResumeAllArgs struct{}
+type ProjectResumeAllReply struct{ Count int64 }
 
 // --- Review ---
 
