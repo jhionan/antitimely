@@ -316,7 +316,264 @@ func TestPipeline_AgentSignal_StalePIDsPrunedOnPSFailure(t *testing.T) {
 	}
 }
 
-func TestPipeline_PausedProject_NoTickWritten(t *testing.T) {
+// Non-allowlisted binary running in a directory covered by a rule's
+// cwd_prefix should still be tracked and attributed to that project. This is
+// the bug-driven case: ad-hoc tools (go, bun, make, …) shouldn't be invisible
+// just because the user hasn't pre-registered every binary they ever use.
+func TestPipeline_AgentSignal_CwdRuleWidensBinaryAllowlist(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "dentix", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	cwdPrefix := "/Users/rian/focaApp/dentix/"
+	cache.Store(&CacheSnapshot{
+		// Note: 'go' is NOT in AllowedBinaries.
+		AllowedBinaries: map[string]bool{},
+		Rules: []domain.RuleSpec{
+			{ID: 1, ProjectID: projID, Priority: 100, MatchCwdPrefix: &cwdPrefix},
+		},
+		CwdPrefixes: []string{"/Users/rian/focaApp/dentix"},
+	})
+	br.IdleSecondsVal = 5
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "go", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: "/Users/rian/focaApp/dentix/dentix-flutter-app"}
+	_ = p.RunTick(ctx, 1000) // establish prevCPU
+
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "go", CPUTicks: 200}}
+	_ = p.RunTick(ctx, 1005)
+
+	rows, _ := q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: 0, Ts_2: 9999})
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d (%+v)", len(rows), rows)
+	}
+	if rows[0].Name != "dentix" || rows[0].TickCount != 1 {
+		t.Errorf("got %+v, want dentix/1", rows[0])
+	}
+}
+
+// A non-allowlisted binary whose cwd matches no rule must remain invisible
+// — i.e. the widening doesn't degenerate into "track everything".
+func TestPipeline_AgentSignal_NonAllowlistedOutsideTrackedDir_Skipped(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{},
+		CwdPrefixes:     []string{"/Users/rian/work"},
+	})
+	br.IdleSecondsVal = 5
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: "/tmp"}
+	_ = p.RunTick(ctx, 1000)
+
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 5000}}
+	_ = p.RunTick(ctx, 1005)
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("ffmpeg in /tmp should not be tracked; got %d ticks", n)
+	}
+}
+
+// Once a PID is classified as "ignored", subsequent ticks must skip it
+// without re-running the cwd lookup. The lsof bridge call is expensive in
+// real life; the cache is the whole point of this design.
+func TestPipeline_AgentSignal_IgnoredPID_DoesNotRelsof(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{},
+		CwdPrefixes:     []string{"/work/tracked"},
+	})
+	br.IdleSecondsVal = 5
+	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{42: "/tmp"}
+	_ = p.RunTick(ctx, 1000)
+	// Threshold crossing on tick 2 → classify as ignored.
+	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 200}}
+	_ = p.RunTick(ctx, 1005)
+
+	cls, ok := p.procClass[42]
+	if !ok {
+		t.Fatal("expected procClass[42] to be populated after threshold crossing")
+	}
+	if cls.track {
+		t.Errorf("procClass[42].track = true, want false (cwd not in tracked prefix)")
+	}
+
+	// Now make cwd lookup fail loudly. If the pipeline tries lsof again,
+	// the test will detect a tick was attempted past the cache layer.
+	br.CWDErr = errors.New("lsof must not be called for cached-ignored PID")
+	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 300}}
+	if err := p.RunTick(ctx, 1010); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("ignored PID should produce 0 ticks across all runs; got %d", n)
+	}
+}
+
+// PID reuse with a new binary name must invalidate the cached classification
+// so the replacement process gets evaluated afresh.
+func TestPipeline_AgentSignal_PIDReuse_BinaryNameChange_Reclassifies(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "dentix", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	cwd := "/work/dentix/"
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{},
+		Rules: []domain.RuleSpec{
+			{ID: 1, ProjectID: projID, Priority: 100, MatchCwdPrefix: &cwd},
+		},
+		CwdPrefixes: []string{"/work/dentix"},
+	})
+	br.IdleSecondsVal = 5
+
+	// Phase 1: PID 100 = ffmpeg in /tmp → classified as ignored.
+	br.Processes = []macos.ProcessSample{{PID: 100, Name: "ffmpeg", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{100: "/tmp"}
+	_ = p.RunTick(ctx, 1000)
+	br.Processes = []macos.ProcessSample{{PID: 100, Name: "ffmpeg", CPUTicks: 200}}
+	_ = p.RunTick(ctx, 1005)
+	if cls := p.procClass[100]; cls.track {
+		t.Fatalf("phase 1: expected ffmpeg/PID 100 to be classified !track, got %+v", cls)
+	}
+
+	// Phase 2: PID 100 reused — same pid, different binary, fresh CPU counter
+	// (lower than what ffmpeg had). The CPU regression is what bumps prev down;
+	// the name change is what invalidates the cache entry.
+	br.Processes = []macos.ProcessSample{{PID: 100, Name: "go", CPUTicks: 10}}
+	br.CWDByPID = map[int]string{100: "/work/dentix/dentix-flutter-app"}
+	_ = p.RunTick(ctx, 1010) // CPU regressed: invalidate, skip emit.
+	br.Processes = []macos.ProcessSample{{PID: 100, Name: "go", CPUTicks: 110}}
+	_ = p.RunTick(ctx, 1015) // delta=100 ≥ threshold: classify fresh as tracked.
+
+	cls, ok := p.procClass[100]
+	if !ok {
+		t.Fatal("phase 2: expected procClass[100] to be repopulated after reuse")
+	}
+	if cls.name != "go" {
+		t.Errorf("phase 2: cached name = %q, want %q", cls.name, "go")
+	}
+	if !cls.track {
+		t.Errorf("phase 2: reused PID with tracked cwd should classify as track=true")
+	}
+
+	rows, _ := q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: 0, Ts_2: 9999})
+	if len(rows) != 1 || rows[0].Name != "dentix" || rows[0].TickCount != 1 {
+		t.Errorf("expected 1 dentix tick from reused PID; got %+v", rows)
+	}
+}
+
+// PID reuse where the new process happens to share a binary name with the
+// old one is detected via the CPU regression check alone.
+func TestPipeline_AgentSignal_PIDReuse_CPURegression_Reclassifies(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{},
+		CwdPrefixes:     []string{"/work/tracked"},
+	})
+	br.IdleSecondsVal = 5
+
+	// Phase 1: PID 50 = zsh in /tmp → ignored, CPU rises to 500.
+	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 400}}
+	br.CWDByPID = map[int]string{50: "/tmp"}
+	_ = p.RunTick(ctx, 1000)
+	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 500}}
+	_ = p.RunTick(ctx, 1005)
+	if _, ok := p.procClass[50]; !ok {
+		t.Fatal("phase 1: expected zsh to be classified")
+	}
+
+	// Phase 2: PID 50 reused as a new zsh inside the tracked dir. CPU starts
+	// fresh at 0; the regression triggers cache invalidation.
+	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 0}}
+	br.CWDByPID = map[int]string{50: "/work/tracked/repo"}
+	_ = p.RunTick(ctx, 1010)
+	if _, ok := p.procClass[50]; ok {
+		t.Errorf("phase 2: CPU regression should have evicted procClass[50]")
+	}
+
+	// Phase 3: new zsh accumulates CPU; reclassifies as tracked via cwd rule.
+	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 100}}
+	_ = p.RunTick(ctx, 1015)
+	cls, ok := p.procClass[50]
+	if !ok {
+		t.Fatal("phase 3: expected fresh classification after threshold crossing")
+	}
+	if !cls.track {
+		t.Errorf("phase 3: new zsh in tracked dir should classify as track=true; got %+v", cls)
+	}
+}
+
+// Swapping the cache snapshot (i.e. ReloadCache after a rule/watch mutation)
+// must drop classifications so a long-running process gets re-evaluated
+// against the new rules. Otherwise adding a cwd rule wouldn't retroactively
+// catch processes that the daemon already decided were "ignored".
+func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// Initial cache: no rules; ffmpeg in /work/dentix is ignored.
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{},
+		CwdPrefixes:     nil,
+	})
+	br.IdleSecondsVal = 5
+	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{7: "/work/dentix/x"}
+	_ = p.RunTick(ctx, 1000)
+	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 200}}
+	_ = p.RunTick(ctx, 1005)
+	if cls := p.procClass[7]; cls.track {
+		t.Fatalf("pre-swap: expected ignored; got %+v", cls)
+	}
+
+	// Swap in a snapshot that adds the cwd prefix. The pipeline should
+	// notice the pointer change and clear procClass.
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries: map[string]bool{},
+		CwdPrefixes:     []string{"/work/dentix"},
+	})
+	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 300}}
+	_ = p.RunTick(ctx, 1010)
+
+	cls, ok := p.procClass[7]
+	if !ok {
+		t.Fatal("post-swap: expected procClass[7] to be re-populated against the new snapshot")
+	}
+	if !cls.track {
+		t.Errorf("post-swap: expected ffmpeg to be re-classified as tracked; got %+v", cls)
+	}
+}
+
+// Agent CPU activity in a paused project's directory should auto-resume the
+// project (flip the DB flag + clear the in-memory pause entry) and let the
+// current tick land. Focus signals don't get this treatment — see the
+// companion test below.
+func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 	p, br, cache, db := newTestPipeline(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -325,6 +582,9 @@ func TestPipeline_PausedProject_NoTickWritten(t *testing.T) {
 	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "paused-proj", CreatedAt: 1000})
 	if err != nil {
 		t.Fatalf("add project: %v", err)
+	}
+	if err := q.SetProjectPaused(ctx, store.SetProjectPausedParams{Paused: 1, Name: "paused-proj"}); err != nil {
+		t.Fatalf("pause: %v", err)
 	}
 
 	bin := "claude"
@@ -344,13 +604,146 @@ func TestPipeline_PausedProject_NoTickWritten(t *testing.T) {
 
 	var n int
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
-	if n != 0 {
-		t.Errorf("paused project should not have ticks; got %d", n)
+	if n != 1 {
+		t.Errorf("auto-resume should let one tick land; got %d", n)
 	}
-	// Observation IS upserted even for a paused project.
+
+	// DB-level pause flag flipped.
+	var paused int64
+	db.QueryRow(`SELECT paused FROM projects WHERE id=?`, projID).Scan(&paused)
+	if paused != 0 {
+		t.Errorf("project.paused should be 0 after auto-resume; got %d", paused)
+	}
+
+	// In-memory cache snapshot updated too — next tick must not see the
+	// project as paused.
+	if cache.Snapshot().PausedProjectIDs[projID] {
+		t.Errorf("cache snapshot should no longer flag project as paused")
+	}
+}
+
+func TestPipeline_FocusSignal_DisarmsProject(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "armed-proj", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	bundle := "com.example.editor"
+	title := "armed-proj"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:   map[string]bool{bundle: true},
+		AllowedBinaries:  map[string]bool{},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBundleID: &bundle, MatchTitleSubstr: &title}},
+		PausedProjectIDs: map[int64]bool{},
+		ArmedProjects:    map[int64]bool{projID: true},
+	})
+	br.IdleSecondsVal = 5
+	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1234}
+	br.FocusedTitle = "armed-proj — main"
+
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+
+	// Focus tick should land.
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_id=?`, projID).Scan(&n)
+	if n != 1 {
+		t.Errorf("expected 1 focus tick, got %d", n)
+	}
+	// Project should be disarmed afterward.
+	if cache.Snapshot().ArmedProjects[projID] {
+		t.Errorf("project should be disarmed after focus signal, still armed: %v", cache.Snapshot().ArmedProjects)
+	}
+}
+
+// Focus signal alone is too weak to imply "user is working again" — an open
+// window in the background shouldn't override an explicit pause. The
+// observation is still upserted so it remains visible in review history.
+func TestPipeline_PausedProject_FocusSignal_StillSkipped(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "paused-proj", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	if err := q.SetProjectPaused(ctx, store.SetProjectPausedParams{Paused: 1, Name: "paused-proj"}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	bundle := "com.example.app"
+	title := "paused-proj"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:   map[string]bool{bundle: true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBundleID: &bundle, MatchTitleSubstr: &title}},
+		PausedProjectIDs: map[int64]bool{projID: true},
+	})
+	br.IdleSecondsVal = 5
+	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1}
+	br.FocusedTitle = "paused-proj — main"
+	_ = p.RunTick(ctx, 1000)
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("focus signal on paused project should write no ticks; got %d", n)
+	}
+	var paused int64
+	db.QueryRow(`SELECT paused FROM projects WHERE id=?`, projID).Scan(&paused)
+	if paused != 1 {
+		t.Errorf("project.paused should remain 1 after focus-only activity; got %d", paused)
+	}
+	// Observation still upserted for review history.
 	var obsCount int
-	db.QueryRow(`SELECT COUNT(*) FROM observations WHERE binary_name='claude'`).Scan(&obsCount)
+	db.QueryRow(`SELECT COUNT(*) FROM observations WHERE source='focus'`).Scan(&obsCount)
 	if obsCount == 0 {
-		t.Errorf("expected observation to be upserted even for paused project")
+		t.Errorf("expected focus observation to be upserted even for paused project")
+	}
+}
+
+func TestPipeline_FocusSignal_DoesNotDisarmOtherProjects(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	idA, err := q.AddProject(ctx, store.AddProjectParams{Name: "alpha", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject alpha: %v", err)
+	}
+	idB, err := q.AddProject(ctx, store.AddProjectParams{Name: "beta", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject beta: %v", err)
+	}
+	bundle := "com.example.editor"
+	titleA := "alpha"
+	cache.Store(&CacheSnapshot{
+		AllowedBundles:   map[string]bool{bundle: true},
+		AllowedBinaries:  map[string]bool{},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: idA, Priority: 100, MatchBundleID: &bundle, MatchTitleSubstr: &titleA}},
+		PausedProjectIDs: map[int64]bool{},
+		ArmedProjects:    map[int64]bool{idA: true, idB: true},
+	})
+	br.IdleSecondsVal = 5
+	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1234}
+	br.FocusedTitle = "alpha — main"
+
+	if err := p.RunTick(ctx, 1000); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+
+	got := cache.Snapshot().ArmedProjects
+	if got[idA] {
+		t.Errorf("expected alpha disarmed, still armed: %v", got)
+	}
+	if !got[idB] {
+		t.Errorf("expected beta still armed (focus was for alpha), got %v", got)
 	}
 }
