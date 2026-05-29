@@ -204,10 +204,8 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 				noCompany = &rpcapi.CompanyTotals{Name: "(no company)"}
 			}
 			noCompany.Projects = append(noCompany.Projects, pt)
-			if !isPaused {
-				noCompany.BillableSeconds += pt.BillableSeconds
-				noCompany.TodaySeconds += pt.TodaySeconds
-			}
+			noCompany.BillableSeconds += pt.BillableSeconds
+			noCompany.TodaySeconds += pt.TodaySeconds
 		} else {
 			ck := compKey{id: pr.CompanyID.Int64, name: pr.CompanyName.String}
 			ct := compMap[ck]
@@ -219,10 +217,8 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 				compMap[ck] = ct
 			}
 			ct.Projects = append(ct.Projects, pt)
-			if !isPaused {
-				ct.BillableSeconds += pt.BillableSeconds
-				ct.TodaySeconds += pt.TodaySeconds
-			}
+			ct.BillableSeconds += pt.BillableSeconds
+			ct.TodaySeconds += pt.TodaySeconds
 		}
 	}
 
