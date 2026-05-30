@@ -16,6 +16,13 @@ type PipelineConfig struct {
 	IdleThresholdSec   int
 	CPUDeltaThresh     uint64 // applied when user is non-idle
 	CPUDeltaThreshIdle uint64 // applied when user has been idle past IdleThresholdSec
+	// AutoDisarmAgentTicks is how many ticks of matching agent activity (while
+	// the user is present) an armed project must accumulate before it
+	// auto-disarms and starts counting. 0 disables auto-disarm (the project
+	// then stays armed until a focus signal disarms it). This is the self-heal
+	// that stops arming from permanently dropping billable time when window
+	// title capture — the normal focus-disarm path — is unavailable.
+	AutoDisarmAgentTicks int
 }
 
 // procClass is what the agent loop remembers about a PID after its first
@@ -41,13 +48,18 @@ type Pipeline struct {
 	procClass map[int]procClass
 	lastSnap  *CacheSnapshot
 	perm      *PermissionTracker
+	// armedAgentStreak counts ticks of matching agent activity (user present)
+	// accumulated by an armed project toward the AutoDisarmAgentTicks
+	// threshold. Reset to zero whenever the project disarms.
+	armedAgentStreak map[int64]int
 }
 
 func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	return &Pipeline{
 		q: q, bridge: b, cache: cache, cfg: cfg,
-		prevCPU:   map[int]uint64{},
-		procClass: map[int]procClass{},
+		prevCPU:          map[int]uint64{},
+		procClass:        map[int]procClass{},
+		armedAgentStreak: map[int64]int{},
 	}
 }
 
@@ -101,6 +113,14 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		return nil
 	}
 
+	// Per-tick local state for the arming gate. snap.ArmedProjects is the
+	// start-of-tick view; once we auto-disarm a project mid-tick we must treat
+	// it as disarmed for the rest of this tick (the local snap won't reflect
+	// the cache mutation). armedCountedThisTick dedups the streak/suppressed
+	// bookkeeping when several PIDs map to the same armed project in one tick.
+	disarmedThisTick := map[int64]bool{}
+	armedCountedThisTick := map[int64]bool{}
+
 	for _, sig := range signals {
 		obsID, err := p.q.UpsertObservation(ctx, store.UpsertObservationParams{
 			Source:      string(sig.Source),
@@ -127,6 +147,8 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 
 		if sig.IsFocus() && pid != nil {
 			p.cache.DisarmProject(*pid)
+			delete(p.armedAgentStreak, *pid)
+			disarmedThisTick[*pid] = true
 		}
 
 		// Paused projects:
@@ -145,12 +167,51 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			}
 			p.cache.MarkProjectActive(*pid)
 			p.cache.ArmProject(*pid)
+			delete(p.armedAgentStreak, *pid)
 			log.Printf("auto-resumed project %d: agent activity (binary=%q cwd=%q)", *pid, sig.BinaryName, sig.Cwd)
 			continue
 		}
 
-		if sig.IsAgent() && pid != nil && snap.ArmedProjects[*pid] {
-			continue
+		// Arming gate for agent signals. An armed project's background CPU
+		// doesn't count until the project is disarmed — normally by focusing a
+		// matching window. But focus-disarm depends on window-title capture,
+		// which can fail silently (e.g. Accessibility revoked after a rebuild),
+		// leaving the project permanently armed and silently dropping billable
+		// time. Two safeguards: count the suppressed ticks so Status can show
+		// them, and auto-disarm after sustained matching activity while the
+		// user is present (sustained CPU in the project's dir is real presence).
+		if sig.IsAgent() && pid != nil && snap.ArmedProjects[*pid] && !disarmedThisTick[*pid] {
+			if armedCountedThisTick[*pid] {
+				continue // this project's gate already handled this tick
+			}
+			armedCountedThisTick[*pid] = true
+
+			if userPresent && p.cfg.AutoDisarmAgentTicks > 0 {
+				p.armedAgentStreak[*pid]++
+				if p.armedAgentStreak[*pid] >= p.cfg.AutoDisarmAgentTicks {
+					p.cache.DisarmProject(*pid)
+					delete(p.armedAgentStreak, *pid)
+					disarmedThisTick[*pid] = true
+					log.Printf("auto-disarmed project %d: %d ticks of sustained agent activity (binary=%q cwd=%q)",
+						*pid, p.cfg.AutoDisarmAgentTicks, sig.BinaryName, sig.Cwd)
+					// fall through: this tick now counts.
+				} else {
+					if n := p.cache.AddSuppressed(*pid); n == 1 {
+						log.Printf("project %d armed: suppressing agent ticks pending focus or sustained activity (binary=%q cwd=%q)",
+							*pid, sig.BinaryName, sig.Cwd)
+					}
+					continue
+				}
+			} else {
+				// User idle (or auto-disarm disabled): never auto-disarm —
+				// idle background work is exactly what arming gates. Still
+				// record the suppression for visibility.
+				if n := p.cache.AddSuppressed(*pid); n == 1 {
+					log.Printf("project %d armed: suppressing agent ticks (user idle) (binary=%q cwd=%q)",
+						*pid, sig.BinaryName, sig.Cwd)
+				}
+				continue
+			}
 		}
 
 		var projectID sql.NullInt64

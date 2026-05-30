@@ -74,6 +74,9 @@ func cmdStatus(args []string) int {
 			armedNote := ""
 			if pr.Armed {
 				armedNote = "  (armed: needs focus)"
+				if pr.SuppressedSeconds > 0 {
+					armedNote = fmt.Sprintf("  (armed: needs focus — %s NOT counted!)", fmtDuration(pr.SuppressedSeconds))
+				}
 			}
 			fmt.Printf("    %-36s %s   (today: %s)%s%s\n",
 				pr.Name,
@@ -100,6 +103,9 @@ func cmdStatus(args []string) int {
 			armedNote := ""
 			if pr.Armed {
 				armedNote = "  (armed: needs focus)"
+				if pr.SuppressedSeconds > 0 {
+					armedNote = fmt.Sprintf("  (armed: needs focus — %s NOT counted!)", fmtDuration(pr.SuppressedSeconds))
+				}
 			}
 			fmt.Printf("    %-36s %s   (today: %s)%s%s\n",
 				pr.Name,

@@ -116,10 +116,20 @@ func Run(cfg Config, schemaSQL string) error {
 		return fmt.Errorf("initial cache load: %w", err)
 	}
 
+	// Auto-disarm an armed project after ~60s of sustained, user-present agent
+	// activity in its directory — long enough to ignore a transient blip, short
+	// enough that a broken focus-disarm path never silently eats much time.
+	autoDisarmTicks := 12
+	if cfg.IntervalSeconds > 0 {
+		if n := 60 / cfg.IntervalSeconds; n > 0 {
+			autoDisarmTicks = n
+		}
+	}
 	pipeline := NewPipeline(q, bridge, cache, PipelineConfig{
-		IdleThresholdSec:   cfg.IdleThresholdSec,
-		CPUDeltaThresh:     cfg.AgentCPUThresh,
-		CPUDeltaThreshIdle: cfg.AgentCPUThreshIdle,
+		IdleThresholdSec:     cfg.IdleThresholdSec,
+		CPUDeltaThresh:       cfg.AgentCPUThresh,
+		CPUDeltaThreshIdle:   cfg.AgentCPUThreshIdle,
+		AutoDisarmAgentTicks: autoDisarmTicks,
 	})
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)

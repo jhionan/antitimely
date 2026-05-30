@@ -39,6 +39,10 @@ type ProjectTotals struct {
 	TodaySeconds    int64
 	Paused          bool
 	Armed           bool
+	// SuppressedSeconds is agent time dropped while the project is armed
+	// (pending focus / auto-disarm). Surfaced so an armed project that is
+	// silently not counting becomes visible instead of just losing the time.
+	SuppressedSeconds int64
 }
 
 // --- Invoices ---

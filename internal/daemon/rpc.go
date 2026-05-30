@@ -179,6 +179,8 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	compMap := map[compKey]*rpcapi.CompanyTotals{}
 	var noCompany *rpcapi.CompanyTotals
 
+	suppressedByProject := s.Cache.SuppressedAll()
+
 	for _, pr := range projRows {
 		since := int64(0)
 		lastInvUnix := int64(0)
@@ -192,11 +194,12 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 		isPaused := pr.Paused != 0
 
 		pt := rpcapi.ProjectTotals{
-			Name:            pr.Name,
-			BillableSeconds: billableTicks * tickSec,
-			TodaySeconds:    todayTicks * tickSec,
-			Paused:          isPaused,
-			Armed:           s.Cache.Snapshot().ArmedProjects[pr.ID],
+			Name:              pr.Name,
+			BillableSeconds:   billableTicks * tickSec,
+			TodaySeconds:      todayTicks * tickSec,
+			Paused:            isPaused,
+			Armed:             s.Cache.Snapshot().ArmedProjects[pr.ID],
+			SuppressedSeconds: int64(suppressedByProject[pr.ID]) * tickSec,
 		}
 
 		if !pr.CompanyID.Valid {
