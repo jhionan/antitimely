@@ -72,8 +72,12 @@ tell application "System Events"
 			end try
 		end repeat
 		return ""
-	on error
-		return ""
+	on error errMsg number errNum
+		-- Emit a structured, control-byte-framed payload instead of swallowing
+		-- the error as "". osascript can exit 0 even on an assistive-access
+		-- denial, so this is how the denial reaches Go (see parseTitleOutput).
+		set sep to (character id 1)
+		return sep & "ATL_ERR" & sep & (errNum as string) & sep & errMsg
 	end try
 end tell
 `
@@ -86,7 +90,7 @@ func FocusedWindowTitleReal(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out), nil
+	return parseTitleOutput(out)
 }
 
 // FocusedWindowDebugReal returns a multi-line report describing every window
@@ -143,6 +147,60 @@ end tell
 	return out, nil
 }
 
+const (
+	// titleErrSep is an SOH control byte (U+0001). No window title contains
+	// it, so it safely frames the structured error the title script emits via
+	// `on error` (see titleScript). titleErrPrefix marks an error payload.
+	titleErrSep    = "\x01"
+	titleErrPrefix = "\x01ATL_ERR\x01"
+)
+
+// classifyOsascriptErr returns ErrAccessibilityDenied when osascript output
+// looks like a TCC assistive-access / Automation denial, else nil. macOS
+// embeds the numeric AppleScript error code in parentheses regardless of UI
+// language, so we anchor on the code first (-1743 is the classic "not
+// authorized" code; -1728 is what a Spanish-locale machine reports for an
+// assistive-access denial). The English phrase fallbacks catch codes we
+// haven't catalogued on locales that still emit English text.
+//
+// Codes: -1743 (errAEEventNotPermitted, Automation denial), -1728
+// (errAENoSuchObject, seen on some locales for assistive-access denial), and
+// -25211 (kAXErrorAPIDisabled, returned when the AX API rejects an untrusted
+// binary — the code the title script's `windows of <proc>` access hits).
+func classifyOsascriptErr(s string) error {
+	for _, code := range []string{"(-1743)", "(-1728)", "(-25211)"} {
+		if strings.Contains(s, code) {
+			return ErrAccessibilityDenied
+		}
+	}
+	low := strings.ToLower(s)
+	if strings.Contains(low, "not allowed assistive access") ||
+		strings.Contains(low, "not authorized") {
+		return ErrAccessibilityDenied
+	}
+	return nil
+}
+
+// parseTitleOutput interprets the stdout of titleScript. A real (possibly
+// empty) title is returned as-is. A structured error payload — emitted by the
+// script's `on error` handler so denials survive osascript's exit-0 behaviour —
+// is decoded into ErrAccessibilityDenied or a generic error. This is what lets
+// the caller distinguish "app has no title" from "I'm not allowed to read it".
+func parseTitleOutput(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	rest, isErr := strings.CutPrefix(s, titleErrPrefix)
+	if !isErr {
+		return s, nil
+	}
+	code, msg, _ := strings.Cut(rest, titleErrSep)
+	// Reconstruct the parenthesised code so classifyOsascriptErr can anchor on
+	// it exactly as it does for raw osascript stderr.
+	if err := classifyOsascriptErr("(" + code + ") " + msg); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("osascript title error %s: %s", code, msg)
+}
+
 func runOsascript(ctx context.Context, script string) (string, error) {
 	cctx, cancel := withTimeout(ctx, osascriptDeadline)
 	defer cancel()
@@ -150,13 +208,8 @@ func runOsascript(ctx context.Context, script string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := string(out)
-		// -1743 is the canonical AppleScript error code for "not authorized".
-		// Anchor on it first so non-English locales still get the typed sentinel;
-		// keep the English-string fallbacks as a secondary signal.
-		if strings.Contains(s, "(-1743)") ||
-			strings.Contains(s, "not allowed assistive access") ||
-			strings.Contains(s, "not authorized") {
-			return "", ErrAccessibilityDenied
+		if derr := classifyOsascriptErr(s); derr != nil {
+			return "", derr
 		}
 		return "", fmt.Errorf("osascript: %w (%s)", err, strings.TrimSpace(s))
 	}

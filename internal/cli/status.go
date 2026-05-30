@@ -36,7 +36,10 @@ func cmdStatus(args []string) int {
 	)
 	if reply.PermissionState == "accessibility_denied" {
 		fmt.Fprintln(os.Stderr,
-			"  Warning: Window-title capture disabled. Enable in System Settings -> Privacy & Security -> Automation -> antitimely -> System Events.")
+			"  Warning: Window-title capture disabled. Grant antitimely BOTH:\n"+
+				"    - Privacy & Security -> Accessibility (required for Electron/JVM apps: VS Code, Antigravity, JetBrains, ...)\n"+
+				"    - Privacy & Security -> Automation -> antitimely -> System Events\n"+
+				"  Then restart the daemon (make rebuild). A rebuild can reset these grants.")
 	}
 	fmt.Println()
 
