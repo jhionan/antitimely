@@ -144,6 +144,8 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	doc, err := invoice.BuildDoc(invoice.BuildDocInput{
 		Now:           now,
 		ClientName:    co.Name,
+		Client:        cfg.Clients[co.Name], // zero value if no clients entry
+
 		BillingMode:   co.BillingMode,
 		Currency:      co.Currency.String,
 		RateCents:     co.RateCents.Int64,

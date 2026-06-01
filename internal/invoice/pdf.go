@@ -3,11 +3,11 @@ package invoice
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/johnfercher/maroto/v2"
 	"github.com/johnfercher/maroto/v2/pkg/components/col"
 	"github.com/johnfercher/maroto/v2/pkg/components/image"
+	"github.com/johnfercher/maroto/v2/pkg/components/line"
 	"github.com/johnfercher/maroto/v2/pkg/components/row"
 	"github.com/johnfercher/maroto/v2/pkg/components/text"
 	"github.com/johnfercher/maroto/v2/pkg/config"
@@ -16,6 +16,16 @@ import (
 	"github.com/johnfercher/maroto/v2/pkg/core"
 	"github.com/johnfercher/maroto/v2/pkg/props"
 )
+
+// divider draws a full-width horizontal rule (margin to margin — SizePercent
+// 100, since maroto defaults to 90) followed by padding, so the next block
+// doesn't sit flush against the line.
+func divider(m core.Maroto) {
+	m.AddRow(1, col.New(12).Add(
+		line.New(props.Line{Thickness: 0.2, Color: gray, SizePercent: 100}),
+	))
+	m.AddRows(row.New(8)) // ~24px padding below the divider
+}
 
 // gray is a grey color suitable for secondary text (labels).
 var gray = &props.Color{Red: 128, Green: 128, Blue: 128}
@@ -57,10 +67,7 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 		),
 	)
 	m.AddRows(row.New(2)) // small spacer
-	// Horizontal divider below the header.
-	m.AddRow(2, col.New(12).Add(
-		text.New(strings.Repeat("_", 120), props.Text{Size: 6, Color: gray, Align: align.Left}),
-	))
+	divider(m)
 
 	// Billed-to / Issued-by two-column block.
 	m.AddRow(6,
@@ -78,7 +85,7 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 		taxLine = doc.Sender.TaxID
 	}
 	addressLines := append([]string{doc.Sender.LegalName, taxLine}, doc.Sender.AddressLines...)
-	clientLines := []string{doc.ClientName}
+	clientLines := buildClientLines(doc)
 	maxLines := len(addressLines)
 	if len(clientLines) > maxLines {
 		maxLines = len(clientLines)
@@ -96,7 +103,7 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 			col.New(6).Add(text.New(right, props.Text{Size: 9})),
 		)
 	}
-	m.AddRows(row.New(4)) // spacer
+	m.AddRows(row.New(8)) // ~24px margin below the billed-to section
 
 	// Line items table — header row.
 	m.AddRow(6,
@@ -106,10 +113,7 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 		col.New(1).Add(text.New("Tax", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right})),
 		col.New(3).Add(text.New("Total", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right})),
 	)
-	// Divider.
-	m.AddRow(2, col.New(12).Add(
-		text.New(strings.Repeat("_", 120), props.Text{Size: 6, Color: gray}),
-	))
+	divider(m)
 
 	// One row: the aggregated line item.
 	qtyStr := FormatHours(doc.LineItem.QuantityHoursTimes100)
@@ -156,7 +160,9 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 			col.New(3).Add(text.New(tl.Value, props.Text{Size: 9, Style: style, Align: align.Right})),
 		)
 	}
-	m.AddRows(row.New(6)) // spacer
+	m.AddRows(row.New(4)) // spacer
+
+	divider(m)
 
 	// "Ways to pay" section.
 	m.AddRow(5, col.New(12).Add(
@@ -183,11 +189,14 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 			if i == 0 {
 				label = f.Label
 			}
-			m.AddRow(4,
+			// AddAutoRow so a long value (e.g. a bank address) wraps across the
+			// full column width instead of being clipped to a fixed height.
+			m.AddAutoRow(
 				col.New(3).Add(text.New(label, props.Text{Size: 8, Color: gray})),
 				col.New(9).Add(text.New(vl, props.Text{Size: 9})),
 			)
 		}
+		m.AddRows(row.New(2)) // gap between fields (auto-rows are otherwise flush)
 	}
 
 	return generateAndSave(m, outPath)
@@ -202,6 +211,28 @@ func generateAndSave(m core.Maroto, outPath string) error {
 		return fmt.Errorf("save pdf: %w", err)
 	}
 	return nil
+}
+
+// buildClientLines composes the "Billed to" lines. Falls back to the company
+// name alone when no Client details are configured (back-compat). Order: legal
+// name, "Label TaxID", email, then address lines — mirroring the sender block.
+func buildClientLines(doc InvoiceDoc) []string {
+	name := doc.ClientName
+	if doc.Client.LegalName != "" {
+		name = doc.Client.LegalName
+	}
+	lines := []string{name}
+	if doc.Client.TaxID != "" {
+		tax := doc.Client.TaxID
+		if doc.Client.TaxIDLabel != "" {
+			tax = doc.Client.TaxIDLabel + " " + doc.Client.TaxID
+		}
+		lines = append(lines, tax)
+	}
+	if doc.Client.Email != "" {
+		lines = append(lines, doc.Client.Email)
+	}
+	return append(lines, doc.Client.AddressLines...)
 }
 
 // splitLines splits s on '\n'. Returns at least one element (possibly empty

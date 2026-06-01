@@ -45,8 +45,19 @@ type GlobalInvoiceConfig struct {
 	DueDays       int    `yaml:"due_days"`
 }
 
+// Client is the billed-to party for a company's invoices. Keyed by company
+// name in config; absent entry = render the company name only (back-compat).
+type Client struct {
+	LegalName    string   `yaml:"legal_name"`
+	TaxID        string   `yaml:"tax_id"`
+	TaxIDLabel   string   `yaml:"tax_id_label"`
+	Email        string   `yaml:"email"`
+	AddressLines []string `yaml:"address_lines"`
+}
+
 type SendersConfig struct {
 	Senders map[string]Sender   `yaml:"senders"`
+	Clients map[string]Client   `yaml:"clients"`
 	Invoice GlobalInvoiceConfig `yaml:"invoice"`
 }
 

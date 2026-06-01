@@ -11,6 +11,7 @@ import (
 type BuildDocInput struct {
 	Now           time.Time
 	ClientName    string
+	Client        Client
 	BillingMode   string // "hourly" | "monthly_fixed"
 	Currency      string
 	RateCents     int64
@@ -42,6 +43,7 @@ func BuildDoc(in BuildDocInput) (InvoiceDoc, error) {
 		PeriodTo:      in.PeriodTo,
 		Currency:      in.Currency,
 		ClientName:    in.ClientName,
+		Client:        in.Client,
 		Sender:        in.Sender,
 		LineItemLabel: in.LineItemLabel,
 		LineItem:      li,

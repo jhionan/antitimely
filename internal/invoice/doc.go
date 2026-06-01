@@ -13,8 +13,11 @@ type InvoiceDoc struct {
 	PeriodTo   time.Time
 	Currency   string // "EUR", "CAD"
 
-	// Billed-to: client company (we only show the name, like Wise).
+	// Billed-to: client company. ClientName is always set (the company name);
+	// Client carries optional full details (legal name, tax id, email,
+	// address). Zero-value Client renders name-only.
 	ClientName string
+	Client     Client
 
 	// Issued-by: us.
 	Sender Sender
