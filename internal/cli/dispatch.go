@@ -50,6 +50,8 @@ func Dispatch(args []string) int {
 		return cmdInstallLaunchAgent(args[1:])
 	case "uninstall-launch-agent":
 		return cmdUninstallLaunchAgent(args[1:])
+	case "restart":
+		return cmdRestartDaemon(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printUsage(os.Stderr)
@@ -79,6 +81,7 @@ Usage:
   antitimely config   init  |  show  |  path
   antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
   antitimely uninstall-launch-agent   remove launch agent and stop background daemon
+  antitimely restart                  restart the background daemon (launchctl kickstart -k)
   antitimely debug   windows  |  frontmost  |  idle
   antitimely help    show this message
 

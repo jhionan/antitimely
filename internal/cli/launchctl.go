@@ -120,6 +120,30 @@ func cmdUninstallLaunchAgent(args []string) int {
 	return 0
 }
 
+func cmdRestartDaemon(args []string) int {
+	// kickstart -k kills the currently-loaded instance and immediately
+	// relaunches it. This only works when the daemon is managed by the launch
+	// agent (the normal install). If it isn't loaded, launchctl reports
+	// "Could not find service" — point the user at install rather than dumping
+	// a raw launchctl error.
+	target := guiDomain() + "/" + launchAgentLabel
+	if err := runLaunchctl("kickstart", "-k", target); err != nil {
+		if strings.Contains(err.Error(), "Could not find service") ||
+			strings.Contains(err.Error(), "No such process") {
+			fmt.Fprintln(os.Stderr, "daemon is not running under launchd —")
+			fmt.Fprintln(os.Stderr, "  run 'antitimely install-launch-agent' first, or restart your manual 'antitimely daemon' by hand.")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "restart:", err)
+		return 1
+	}
+	// kickstart returns once launchd accepts the request; the new process then
+	// takes a few seconds to spawn and rebind the socket. Say so, otherwise an
+	// immediate 'status' looks like a failure.
+	fmt.Println("Daemon restarting… (give it a few seconds before 'status')")
+	return 0
+}
+
 func resolveBinaryPath() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {

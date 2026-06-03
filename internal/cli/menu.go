@@ -38,6 +38,7 @@ func RunMenu() int {
 		fmt.Println("  [9] Reset (wipe data)")
 		fmt.Println("  [E] End day (pause all projects)")
 		fmt.Println("  [R] Resume all projects")
+		fmt.Println("  [D] Restart daemon")
 		fmt.Println("  [h] Help (full CLI usage)")
 		fmt.Println("  [q] Quit")
 		fmt.Print("\nChoice: ")
@@ -72,6 +73,8 @@ func RunMenu() int {
 			projectPauseAll()
 		case "R", "r":
 			projectResumeAll()
+		case "D", "d":
+			cmdRestartDaemon(nil)
 		case "h", "help":
 			printUsage(os.Stdout)
 		case "q", "Q", "":
