@@ -191,6 +191,16 @@ SELECT COUNT(DISTINCT ts) AS tick_count
 FROM ticks
 WHERE project_id IS NOT NULL AND ts >= ? AND ts < ?;
 
+-- name: CountDistinctCompanyTicksSince :one
+-- Company-level billable seconds (as distinct ts) since a cutoff, for the
+-- Status rollup. `company_id IS ?` is null-safe, so passing NULL counts the
+-- "(no company)" bucket. No paused filter: pause stops NEW ticks at write
+-- time, so historical ticks here are real work (see commit 9b6359b).
+SELECT COUNT(DISTINCT t.ts) AS tick_count
+FROM ticks t
+JOIN projects p ON p.id = t.project_id
+WHERE p.company_id IS ? AND t.ts >= ?;
+
 -- name: GetCompanyForInvoice :one
 SELECT id, name, created_at, billing_mode, currency, rate_cents, billed_from
 FROM companies WHERE name = ?;
@@ -204,7 +214,9 @@ WHERE name = ?;
 SELECT sent_at FROM invoices WHERE company_id = ? ORDER BY sent_at DESC LIMIT 1;
 
 -- name: CountTicksForCompanyInRange :one
-SELECT COUNT(*) FROM ticks t
+-- COUNT(DISTINCT ts) so a second worked across multiple projects of the same
+-- company (or multiple windows of one project) bills once, not once per row.
+SELECT COUNT(DISTINCT t.ts) FROM ticks t
 JOIN projects p ON p.id = t.project_id
 WHERE p.company_id = ? AND p.paused = 0
   AND t.ts >= ? AND t.ts < ?;

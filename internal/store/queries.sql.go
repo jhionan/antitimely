@@ -191,6 +191,29 @@ func (q *Queries) AssignedDistinctTicksInRange(ctx context.Context, arg Assigned
 	return tick_count, err
 }
 
+const countDistinctCompanyTicksSince = `-- name: CountDistinctCompanyTicksSince :one
+SELECT COUNT(DISTINCT t.ts) AS tick_count
+FROM ticks t
+JOIN projects p ON p.id = t.project_id
+WHERE p.company_id IS ? AND t.ts >= ?
+`
+
+type CountDistinctCompanyTicksSinceParams struct {
+	CompanyID sql.NullInt64
+	Ts        int64
+}
+
+// Company-level billable seconds (as distinct ts) since a cutoff, for the
+// Status rollup. `company_id IS ?` is null-safe, so passing NULL counts the
+// "(no company)" bucket. No paused filter: pause stops NEW ticks at write
+// time, so historical ticks here are real work (see commit 9b6359b).
+func (q *Queries) CountDistinctCompanyTicksSince(ctx context.Context, arg CountDistinctCompanyTicksSinceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countDistinctCompanyTicksSince, arg.CompanyID, arg.Ts)
+	var tick_count int64
+	err := row.Scan(&tick_count)
+	return tick_count, err
+}
+
 const countPendingReviewSignatures = `-- name: CountPendingReviewSignatures :one
 SELECT COUNT(DISTINCT o.id) AS n
 FROM observations o
@@ -207,7 +230,7 @@ func (q *Queries) CountPendingReviewSignatures(ctx context.Context) (int64, erro
 }
 
 const countTicksForCompanyInRange = `-- name: CountTicksForCompanyInRange :one
-SELECT COUNT(*) FROM ticks t
+SELECT COUNT(DISTINCT t.ts) FROM ticks t
 JOIN projects p ON p.id = t.project_id
 WHERE p.company_id = ? AND p.paused = 0
   AND t.ts >= ? AND t.ts < ?
@@ -219,6 +242,8 @@ type CountTicksForCompanyInRangeParams struct {
 	Ts_2      int64
 }
 
+// COUNT(DISTINCT ts) so a second worked across multiple projects of the same
+// company (or multiple windows of one project) bills once, not once per row.
 func (q *Queries) CountTicksForCompanyInRange(ctx context.Context, arg CountTicksForCompanyInRangeParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTicksForCompanyInRange, arg.CompanyID, arg.Ts, arg.Ts_2)
 	var count int64

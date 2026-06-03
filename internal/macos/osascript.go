@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // ErrAccessibilityDenied is returned when osascript fails due to System Events
@@ -55,23 +57,22 @@ const titleScript = `
 tell application "System Events"
 	set frontProc to first application process whose frontmost is true
 	try
-		set winList to windows of frontProc
-		repeat with w in winList
-			try
-				set wn to name of w
-				if wn is not missing value and wn is not "" then
-					return wn as string
-				end if
-			end try
-			-- Fallback: try AXTitle attribute (some Electron apps don't expose 'name' but do expose AXTitle)
-			try
-				set wt to value of attribute "AXTitle" of w
-				if wt is not missing value and wt is not "" then
-					return wt as string
-				end if
-			end try
-		end repeat
-		return ""
+		-- Read ONLY one window's title, never "windows of frontProc".
+		-- Enumerating the whole window list materialises every window of a
+		-- heavy app (browser/Electron), ballooning osascript to GB and is the
+		-- primary process-leak vector when System Events is slow. Prefer the
+		-- focused window; fall back to window 1 for apps (some Electron ones)
+		-- that don't expose AXFocusedWindow. A genuine denial fails both and
+		-- propagates to the on-error handler below.
+		try
+			set w to value of attribute "AXFocusedWindow" of frontProc
+		on error
+			set w to window 1 of frontProc
+		end try
+		set wt to value of attribute "AXTitle" of w
+		if wt is missing value or wt is "" then set wt to (name of w)
+		if wt is missing value then set wt to ""
+		return wt as string
 	on error errMsg number errNum
 		-- Emit a structured, control-byte-framed payload instead of swallowing
 		-- the error as "". osascript can exit 0 even on an assistive-access
@@ -166,9 +167,12 @@ const (
 // Codes: -1743 (errAEEventNotPermitted, Automation denial), -1728
 // (errAENoSuchObject, seen on some locales for assistive-access denial), and
 // -25211 (kAXErrorAPIDisabled, returned when the AX API rejects an untrusted
-// binary — the code the title script's `windows of <proc>` access hits).
+// binary). The same assistive-access denial surfaces with different numeric
+// codes depending on which AX access trips it — observed: -25211 (`windows
+// of`), -1728 (`AXFocusedWindow` attribute), -1719 (`window 1`) — so all are
+// treated as denials.
 func classifyOsascriptErr(s string) error {
-	for _, code := range []string{"(-1743)", "(-1728)", "(-25211)"} {
+	for _, code := range []string{"(-1743)", "(-1728)", "(-25211)", "(-1719)"} {
 		if strings.Contains(s, code) {
 			return ErrAccessibilityDenied
 		}
@@ -205,6 +209,21 @@ func runOsascript(ctx context.Context, script string) (string, error) {
 	cctx, cancel := withTimeout(ctx, osascriptDeadline)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "osascript", "-e", script)
+	// Put osascript in its own process group so a hung one (blocked in an Apple
+	// Event to an unresponsive System Events) can be killed as a group, taking
+	// any helper children with it rather than orphaning them.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // negative pid = group
+		return cmd.Process.Kill()
+	}
+	// If the process ignores the kill (stuck in an uninterruptible mach call),
+	// give up after WaitDelay so CombinedOutput returns instead of blocking the
+	// poll loop forever, and close the pipes so we don't leak fds.
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := string(out)

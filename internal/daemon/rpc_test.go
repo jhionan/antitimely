@@ -509,6 +509,68 @@ func TestRPC_Status_CompanyGrouping(t *testing.T) {
 	}
 }
 
+// When two projects of the same company tick at the same second (worked
+// simultaneously), the company's billable rollup must count that second once —
+// not once per project. Each project row still keeps its own count.
+func TestRPC_Status_CompanyRollup_DedupsSharedSecond(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	coID, _ := q.AddCompany(ctx, store.AddCompanyParams{Name: "DedupCo", CreatedAt: 1})
+	d1, _ := q.AddProject(ctx, store.AddProjectParams{
+		Name: "d1", CompanyID: sql.NullInt64{Int64: coID, Valid: true}, CreatedAt: 1,
+	})
+	d2, _ := q.AddProject(ctx, store.AddProjectParams{
+		Name: "d2", CompanyID: sql.NullInt64{Int64: coID, Valid: true}, CreatedAt: 1,
+	})
+	obs1, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/work/d1", FirstSeen: 1,
+	})
+	obs2, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/work/d2", FirstSeen: 1,
+	})
+
+	// No invoice → all-time billable. Old timestamps keep them out of "today".
+	// d1: 2000, 2005   d2: 2000 (shared with d1), 2010
+	// Distinct company seconds = {2000, 2005, 2010} = 3 → 15s.
+	insert := func(ts, obs, proj int64) {
+		_ = q.InsertTick(ctx, store.InsertTickParams{
+			Ts: ts, ObservationID: obs, ProjectID: sql.NullInt64{Int64: proj, Valid: true},
+		})
+	}
+	insert(2000, obs1, d1)
+	insert(2005, obs1, d1)
+	insert(2000, obs2, d2)
+	insert(2010, obs2, d2)
+
+	var reply rpcapi.StatusReply
+	if err := client.Call(rpcapi.ServiceName+".Status", rpcapi.StatusArgs{}, &reply); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	var co *rpcapi.CompanyTotals
+	for i := range reply.Companies {
+		if reply.Companies[i].Name == "DedupCo" {
+			co = &reply.Companies[i]
+		}
+	}
+	if co == nil {
+		t.Fatalf("DedupCo not found; got %+v", reply.Companies)
+	}
+	if co.BillableSeconds != 15 {
+		t.Errorf("DedupCo billable = %d, want 15 (shared second counted once)", co.BillableSeconds)
+	}
+	// Per-project rows are informational and keep their own counts: 10s each.
+	byName := map[string]int64{}
+	for _, p := range co.Projects {
+		byName[p.Name] = p.BillableSeconds
+	}
+	if byName["d1"] != 10 || byName["d2"] != 10 {
+		t.Errorf("per-project billable = %v, want d1=10 d2=10", byName)
+	}
+}
+
 func TestRPC_ProjectPauseResume(t *testing.T) {
 	client, _, cache := setupRPCServer(t)
 

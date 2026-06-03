@@ -10,6 +10,9 @@ type FakeBridge struct {
 
 	FocusedTitle    string
 	FocusedTitleErr error
+	// FocusedTitleCalls counts FocusedWindowTitle invocations so tests can
+	// assert the daemon backs off (stops spawning osascript) when denied.
+	FocusedTitleCalls int
 
 	IdleSecondsVal int
 	IdleErr        error
@@ -35,6 +38,7 @@ func (f *FakeBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
 	return f.FrontmostInfoVal, f.FrontmostErr
 }
 func (f *FakeBridge) FocusedWindowTitle(ctx context.Context) (string, error) {
+	f.FocusedTitleCalls++
 	return f.FocusedTitle, f.FocusedTitleErr
 }
 func (f *FakeBridge) IdleSeconds(ctx context.Context) (int, error) {

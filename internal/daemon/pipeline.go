@@ -52,7 +52,16 @@ type Pipeline struct {
 	// accumulated by an armed project toward the AutoDisarmAgentTicks
 	// threshold. Reset to zero whenever the project disarms.
 	armedAgentStreak map[int64]int
+	// titleRetryAt is the earliest unix-second at which the window-title
+	// osascript may be spawned again after a denial. Spawning it every tick
+	// while denied churns (and can leak) osascript processes; we back off and
+	// only re-probe periodically. 0 = no backoff in effect.
+	titleRetryAt int64
 }
+
+// titleDenyBackoffSec is how long to stop spawning the window-title osascript
+// after an accessibility denial before re-probing once.
+const titleDenyBackoffSec int64 = 60
 
 func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	return &Pipeline{
@@ -103,7 +112,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	var signals []domain.Signal
 
 	if userPresent {
-		if sig, ok := p.collectFocusSignal(ctx, snap); ok {
+		if sig, ok := p.collectFocusSignal(ctx, snap, now); ok {
 			signals = append(signals, sig)
 		}
 	}
@@ -228,7 +237,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	return nil
 }
 
-func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot) (domain.Signal, bool) {
+func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, now int64) (domain.Signal, bool) {
 	fm, err := p.bridge.Frontmost(ctx)
 	if err != nil {
 		if errors.Is(err, macos.ErrAccessibilityDenied) {
@@ -241,23 +250,37 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot) 
 		}
 		return domain.Signal{}, false
 	}
-	if p.perm != nil {
-		p.perm.Set("ok")
-	}
 	if !snap.AllowedBundles[fm.BundleID] {
 		return domain.Signal{}, false
 	}
-	title, err := p.bridge.FocusedWindowTitle(ctx)
-	if err != nil {
-		// ErrAccessibilityDenied here means Automation works for Frontmost
-		// but not for window introspection. Surface it the same way so the
-		// user sees a non-"ok" state in Status. Continue with an empty
-		// title regardless — bundle-only rules can still match.
-		if errors.Is(err, macos.ErrAccessibilityDenied) && p.perm != nil {
-			p.perm.Set("accessibility_denied")
+
+	// Title capture is the expensive, leak-prone osascript (it introspects the
+	// focused window's accessibility tree). When it's been denied, back off:
+	// re-probing every tick spawned an osascript every 5s that — if System
+	// Events hangs — orphans at GB scale and accumulates. A permission grant
+	// just takes up to titleDenyBackoffSec to be noticed; bundle-only rules
+	// still match in the meantime.
+	title := ""
+	if now >= p.titleRetryAt {
+		t, terr := p.bridge.FocusedWindowTitle(ctx)
+		switch {
+		case terr == nil:
+			title = t
+			p.titleRetryAt = 0
+			if p.perm != nil {
+				p.perm.Set("ok")
+			}
+		case errors.Is(terr, macos.ErrAccessibilityDenied):
+			if p.perm != nil {
+				p.perm.Set("accessibility_denied")
+			}
+			p.titleRetryAt = now + titleDenyBackoffSec
+			log.Printf("title denied; backing off osascript for %ds", titleDenyBackoffSec)
+		default:
+			// Transient error (timeout, etc.): keep the title empty but don't
+			// enter the denial backoff — the next tick retries.
+			log.Printf("title: %v", terr)
 		}
-		log.Printf("title: %v", err)
-		title = ""
 	}
 	return domain.Signal{
 		Source:      domain.SourceFocus,

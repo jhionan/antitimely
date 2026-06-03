@@ -26,6 +26,13 @@ func TestClassifyOsascriptErr(t *testing.T) {
 			wantDenied: true,
 		},
 		{
+			// Observed live: the `window 1` fallback path surfaces the denial
+			// with this code in the local language.
+			name:       "spanish assistive-access denial via window 1 (-1719)",
+			in:         "(-1719) osascript no tiene permitido el acceso de ayuda.",
+			wantDenied: true,
+		},
+		{
 			name:       "english not-allowed-assistive-access (-1743)",
 			in:         "execution error: System Events got an error: osascript is not allowed assistive access. (-1743)",
 			wantDenied: true,

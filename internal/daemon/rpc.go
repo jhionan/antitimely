@@ -202,13 +202,15 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 			SuppressedSeconds: int64(suppressedByProject[pr.ID]) * tickSec,
 		}
 
+		// Company-level Billable/Today are NOT the sum of per-project counts:
+		// a second worked across two projects of the same company would then
+		// be counted twice. They're set below via COUNT(DISTINCT ts) per
+		// company. Per-project rows keep their own counts (informational).
 		if !pr.CompanyID.Valid {
 			if noCompany == nil {
 				noCompany = &rpcapi.CompanyTotals{Name: "(no company)"}
 			}
 			noCompany.Projects = append(noCompany.Projects, pt)
-			noCompany.BillableSeconds += pt.BillableSeconds
-			noCompany.TodaySeconds += pt.TodaySeconds
 		} else {
 			ck := compKey{id: pr.CompanyID.Int64, name: pr.CompanyName.String}
 			ct := compMap[ck]
@@ -220,8 +222,33 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 				compMap[ck] = ct
 			}
 			ct.Projects = append(ct.Projects, pt)
-			ct.BillableSeconds += pt.BillableSeconds
-			ct.TodaySeconds += pt.TodaySeconds
+		}
+	}
+
+	// Company-level Billable/Today via COUNT(DISTINCT ts) so seconds worked
+	// across multiple projects of one company are billed once. `since` is the
+	// company's last-invoice anchor (0 = all-time); today is since startOfDay.
+	dedupSince := func(companyID sql.NullInt64, since int64) (int64, error) {
+		n, err := s.Q.CountDistinctCompanyTicksSince(ctx, store.CountDistinctCompanyTicksSinceParams{
+			CompanyID: companyID, Ts: since,
+		})
+		return n * tickSec, err
+	}
+	for k, ct := range compMap {
+		cid := sql.NullInt64{Int64: k.id, Valid: true}
+		if ct.BillableSeconds, err = dedupSince(cid, lastInvoice[k.id]); err != nil {
+			return err
+		}
+		if ct.TodaySeconds, err = dedupSince(cid, startOfDay); err != nil {
+			return err
+		}
+	}
+	if noCompany != nil {
+		if noCompany.BillableSeconds, err = dedupSince(sql.NullInt64{}, 0); err != nil {
+			return err
+		}
+		if noCompany.TodaySeconds, err = dedupSince(sql.NullInt64{}, startOfDay); err != nil {
+			return err
 		}
 	}
 

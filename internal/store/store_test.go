@@ -130,3 +130,58 @@ func TestInsertTick_SameTsDifferentObsSameProject_DistinctTsCountsOne(t *testing
 		t.Errorf("expected 1 (dedup by ts), got %d", rows[0].TickCount)
 	}
 }
+
+// Two projects of the SAME company ticking at the same second must bill that
+// second once for the company, even though each project keeps its own count.
+func TestCountTicksForCompanyInRange_DedupsAcrossProjects(t *testing.T) {
+	q, db := openTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	compID, err := q.AddCompany(ctx, store.AddCompanyParams{Name: "Acme", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add company: %v", err)
+	}
+	company := sql.NullInt64{Int64: compID, Valid: true}
+
+	for _, name := range []string{"p1", "p2"} {
+		if _, err := q.AddProject(ctx, store.AddProjectParams{Name: name, CreatedAt: 1000}); err != nil {
+			t.Fatalf("add project %s: %v", name, err)
+		}
+		if err := q.SetProjectCompany(ctx, store.SetProjectCompanyParams{CompanyID: company, Name: name}); err != nil {
+			t.Fatalf("link %s: %v", name, err)
+		}
+	}
+	p1, _ := q.GetProjectByName(ctx, "p1")
+	p2, _ := q.GetProjectByName(ctx, "p2")
+
+	obs1, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/work/p1", FirstSeen: 1000,
+	})
+	obs2, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/work/p2", FirstSeen: 1000,
+	})
+
+	// ts 1100: both projects tick (worked simultaneously). ts 1105: only p1.
+	insert := func(ts, obs, proj int64) {
+		if err := q.InsertTick(ctx, store.InsertTickParams{
+			Ts: ts, ObservationID: obs, ProjectID: sql.NullInt64{Int64: proj, Valid: true},
+		}); err != nil {
+			t.Fatalf("insert tick ts=%d proj=%d: %v", ts, proj, err)
+		}
+	}
+	insert(1100, obs1, p1.ID)
+	insert(1100, obs2, p2.ID)
+	insert(1105, obs1, p1.ID)
+
+	got, err := q.CountTicksForCompanyInRange(ctx, store.CountTicksForCompanyInRangeParams{
+		CompanyID: company, Ts: 0, Ts_2: 9999,
+	})
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	// Distinct seconds the company worked = {1100, 1105} = 2, NOT 3 rows.
+	if got != 2 {
+		t.Errorf("company billable = %d, want 2 (shared second counted once)", got)
+	}
+}
