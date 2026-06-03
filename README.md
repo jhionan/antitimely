@@ -1,6 +1,13 @@
 # antitimely
 
-Personal macOS time tracker that observes an allowlisted set of programs (apps + binaries) and attributes work to projects via rule matching. Captures **parallel work** — three AI agents on three clients during one hour count as three billable hours.
+> Automatic, project-aware time tracking for the agentic era — runs as a tiny macOS daemon, credits **parallel work**, and never asks you to start a timer.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#install)
+[![Made with Go](https://img.shields.io/badge/Go-1.26-00ADD8.svg?logo=go&logoColor=white)](https://go.dev)
+[![No CGO](https://img.shields.io/badge/CGO-none-success.svg)](#layered-architecture)
+
+A macOS time tracker that observes an allowlisted set of programs (apps + binaries) and attributes work to projects via rule matching. It captures **parallel work** — three AI agents on three clients during one hour count as three billable hours.
 
 Built around the observation that modern software work is increasingly *agentic*: you launch a claude/opencode/aider session in one directory, switch to another window, run a build, take a call. antitimely tracks all of it automatically by matching processes' working directories to projects you defined.
 
@@ -185,6 +192,7 @@ Precedence: defaults → config file → CLI flags on `atl daemon`.
 | `atl config init\|show\|path` | manage `~/.antitimely/config.yaml` |
 | `atl install-launch-agent` | install launchd plist + start daemon |
 | `atl uninstall-launch-agent` | stop daemon + remove launchd plist |
+| `atl restart` | restart the running daemon (`launchctl kickstart -k`) |
 | `atl debug frontmost\|windows\|idle` | inspect what the macOS bridge sees right now |
 | `atl daemon [flags]` | run the daemon in the foreground (debugging) |
 | `atl help` | full usage |
@@ -250,3 +258,17 @@ Coverage: domain logic (matching + generalization), SQLite schema + queries, RPC
 - Why focus signals + agent signals are separate and combined
 - The asymmetric idle threshold (added after a real overnight-overcounting bug)
 - Phase 2 sketches (invoice PDFs, web UI)
+
+## Contributing
+
+Contributions are welcome. The codebase is small, pure-Go (no CGO), and layered for easy navigation (see [Layered architecture](#layered-architecture)).
+
+1. `make test` should stay green — domain logic, store queries, and RPC round-trips are all covered.
+2. Keep system calls behind the `internal/macos` bridge so the rest of the code stays testable with the fake bridge.
+3. SQL changes go in `schema.sql` / `queries.sql`, then `make sqlc` to regenerate `internal/store`.
+
+Open an issue to discuss larger changes before sending a PR.
+
+## License
+
+[MIT](./LICENSE) © Jhionan
