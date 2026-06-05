@@ -161,13 +161,18 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		}
 
 		// Paused projects:
-		//   * Agent signal ⇒ fresh CPU activity in a tracked dir is a strong
-		//     "user is back at work" signal: auto-resume and let the tick land.
+		//   * Agent signal while the user is present ⇒ fresh CPU activity in a
+		//     tracked dir is a strong "user is back at work" signal: auto-resume
+		//     and let the tick land.
+		//   * Agent signal while the user is idle ⇒ unattended background CPU
+		//     (dev servers, language servers, AI agents, builds) that must NOT
+		//     resurrect a paused project. Without this gate a paused project
+		//     billed around the clock whenever a process churned in its dir.
 		//   * Focus signal ⇒ a window left open in the foreground is too weak
 		//     a signal; still skip the tick. The observation is already upserted
 		//     above so it survives in review history.
 		if pid != nil && snap.PausedProjectIDs[*pid] {
-			if !sig.IsAgent() {
+			if !sig.IsAgent() || !userPresent {
 				continue
 			}
 			if err := p.q.ResumeProjectByID(ctx, *pid); err != nil {

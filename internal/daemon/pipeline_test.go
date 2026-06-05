@@ -569,11 +569,13 @@ func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
 	}
 }
 
-// Agent CPU activity in a paused project's directory should auto-resume the
-// project (flip the DB flag + clear the in-memory pause entry), arm it, and
-// drop the current tick. The tick is dropped because the project is armed on
-// resume — the agent must wait for a focus disarm before ticks land again.
-// Focus signals don't get auto-resume treatment — see the companion test below.
+// Agent CPU activity in a paused project's directory WHILE THE USER IS PRESENT
+// should auto-resume the project (flip the DB flag + clear the in-memory pause
+// entry), arm it, and drop the current tick. The tick is dropped because the
+// project is armed on resume — the agent must wait for a focus disarm before
+// ticks land again. Presence is required: idle background CPU must not resume
+// (see TestPipeline_PausedProject_AgentSignal_UserIdle_StaysPaused). Focus
+// signals don't get auto-resume treatment — see the companion test below.
 func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 	p, br, cache, db := newTestPipeline(t)
 	defer db.Close()
@@ -596,7 +598,7 @@ func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 		PausedProjectIDs: map[int64]bool{projID: true},
 		ArmedProjects:    map[int64]bool{},
 	})
-	br.IdleSecondsVal = 200 // user idle — agent signals still fire
+	br.IdleSecondsVal = 5 // user present — required for auto-resume
 	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/work/paused-proj/x"}
 	_ = p.RunTick(ctx, 1000) // establish prevCPU
@@ -627,6 +629,60 @@ func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 	// Project is armed so agent ticks wait for a focus disarm.
 	if !cache.Snapshot().ArmedProjects[projID] {
 		t.Errorf("auto-resumed project should be armed; got %v", cache.Snapshot().ArmedProjects)
+	}
+}
+
+// Agent CPU in a paused project's directory while the user is IDLE must NOT
+// auto-resume the project. This is the overnight-accrual bug: unattended
+// background processes (claude, dev servers, language servers, builds) burn
+// CPU in tracked dirs while the user is away, and auto-resume silently
+// un-paused the project so it billed around the clock. Resume requires the
+// user to actually be present.
+func TestPipeline_PausedProject_AgentSignal_UserIdle_StaysPaused(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "paused-proj", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	if err := q.SetProjectPaused(ctx, store.SetProjectPausedParams{Paused: 1, Name: "paused-proj"}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	bin := "claude"
+	cwd := "/work/paused-proj/"
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries:  map[string]bool{"claude": true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwd}},
+		PausedProjectIDs: map[int64]bool{projID: true},
+		ArmedProjects:    map[int64]bool{},
+	})
+	br.IdleSecondsVal = 200 // user idle — the whole point: background CPU must not resurrect a paused project
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.CWDByPID = map[int]string{999: "/work/paused-proj/x"}
+	_ = p.RunTick(ctx, 1000) // establish prevCPU
+
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
+	_ = p.RunTick(ctx, 1005)
+
+	// No ticks counted — the project is paused and the user is away.
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("paused project + idle user should write no ticks; got %d", n)
+	}
+	// DB flag stays paused.
+	var paused int64
+	db.QueryRow(`SELECT paused FROM projects WHERE id=?`, projID).Scan(&paused)
+	if paused != 1 {
+		t.Errorf("project.paused should remain 1 (no resume while idle); got %d", paused)
+	}
+	// Cache snapshot still flags it paused.
+	if !cache.Snapshot().PausedProjectIDs[projID] {
+		t.Errorf("cache snapshot should still flag project paused after idle agent activity")
 	}
 }
 
@@ -867,7 +923,7 @@ func TestPipeline_AutoResume_ArmsAndDropsCurrentTick(t *testing.T) {
 		PausedProjectIDs: map[int64]bool{projID: true},
 		ArmedProjects:    map[int64]bool{},
 	})
-	br.IdleSecondsVal = 200
+	br.IdleSecondsVal = 5 // user present — required for auto-resume
 	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
 
