@@ -136,19 +136,29 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 	)
 	m.AddRows(row.New(4)) // spacer
 
-	// Totals block — right-aligned, 4 lines (right-aligned columns 9 + 10-12).
-	total := FormatMoney(doc.LineItem.TotalCents, doc.Currency)
-	zero := FormatMoney(0, doc.Currency)
-	totalLines := []struct {
+	// Totals block — right-aligned. With a discount we surface the gross
+	// subtotal and the reduction explicitly so the net "Amount Due" is
+	// auditable; without one we keep the original 4-line layout unchanged.
+	type totalLine struct {
 		Label string
 		Value string
 		Bold  bool
-	}{
-		{"Total excluding tax", total, false},
-		{"Total tax", zero, false},
-		{"Amount Due", total, true},
-		{"Due by", FormatDate(doc.DueDate), false},
 	}
+	amountDue := FormatMoney(doc.AmountDueCents(), doc.Currency)
+	zero := FormatMoney(0, doc.Currency)
+	var totalLines []totalLine
+	if doc.DiscountCents > 0 {
+		totalLines = append(totalLines,
+			totalLine{"Subtotal", FormatMoney(doc.LineItem.TotalCents, doc.Currency), false},
+			totalLine{"Discount", "-" + FormatMoney(doc.DiscountCents, doc.Currency), false},
+		)
+	}
+	totalLines = append(totalLines,
+		totalLine{"Total excluding tax", amountDue, false},
+		totalLine{"Total tax", zero, false},
+		totalLine{"Amount Due", amountDue, true},
+		totalLine{"Due by", FormatDate(doc.DueDate), false},
+	)
 	for _, tl := range totalLines {
 		style := fontstyle.Type("")
 		if tl.Bold {

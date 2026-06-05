@@ -83,6 +83,69 @@ func TestBuildDoc_HourlyWithCAD_via_AlsoAccepts(t *testing.T) {
 	}
 }
 
+func TestBuildDoc_Discount(t *testing.T) {
+	sender := Sender{
+		LegalName:    "Y",
+		BankAccounts: map[string]Bank{"CAD": {Title: "ES CAD", Fields: []BankField{{Label: "IBAN", Value: "ES51"}}}},
+	}
+	base := BuildDocInput{
+		Now:           time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC),
+		ClientName:    "BClouder",
+		BillingMode:   "hourly",
+		Currency:      "CAD",
+		RateCents:     5000,
+		Sender:        sender,
+		InvoiceNumber: "ES-0002",
+		PeriodFrom:    time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC),
+		PeriodTo:      time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC),
+		DueDays:       7,
+		LineItemLabel: "Software development",
+		Ticks:         34200, // 47.5h × $50 = $2375.00 = 237500 cents
+		TickSec:       5,
+	}
+
+	// $50.00 discount → net 232500.
+	in := base
+	in.DiscountCents = 5000
+	doc, err := BuildDoc(in)
+	if err != nil {
+		t.Fatalf("BuildDoc: %v", err)
+	}
+	if doc.LineItem.TotalCents != 237500 {
+		t.Errorf("gross line-item total = %d, want 237500 (discount must not alter the line item)", doc.LineItem.TotalCents)
+	}
+	if doc.DiscountCents != 5000 {
+		t.Errorf("DiscountCents = %d, want 5000", doc.DiscountCents)
+	}
+	if got := doc.AmountDueCents(); got != 232500 {
+		t.Errorf("AmountDueCents = %d, want 232500", got)
+	}
+
+	// Discount exceeding the total is rejected.
+	bad := base
+	bad.DiscountCents = 300000
+	if _, err := BuildDoc(bad); err == nil {
+		t.Error("expected error when discount exceeds line-item total")
+	}
+
+	// Negative discount is rejected.
+	neg := base
+	neg.DiscountCents = -1
+	if _, err := BuildDoc(neg); err == nil {
+		t.Error("expected error for negative discount")
+	}
+
+	// Zero discount keeps amount due == line-item total (backward compatible).
+	zero := base
+	zd, err := BuildDoc(zero)
+	if err != nil {
+		t.Fatalf("BuildDoc(zero): %v", err)
+	}
+	if zd.AmountDueCents() != zd.LineItem.TotalCents {
+		t.Errorf("no-discount AmountDueCents = %d, want %d", zd.AmountDueCents(), zd.LineItem.TotalCents)
+	}
+}
+
 func TestBuildDoc_RejectsMissingBankBlock(t *testing.T) {
 	sender := Sender{LegalName: "X", BankAccounts: map[string]Bank{}}
 	in := BuildDocInput{

@@ -76,6 +76,7 @@ type InvoiceGenerateArgs struct {
 	Note          string
 	DryRun        bool
 	AllowEmpty    bool
+	DiscountCents int64 // flat discount in the company's currency; 0 = none
 }
 
 type InvoiceGenerateReply struct {

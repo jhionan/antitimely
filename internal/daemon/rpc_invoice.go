@@ -157,6 +157,7 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		LineItemLabel: cfg.Invoice.LineItemLabel,
 		Ticks:         ticks,
 		TickSec:       s.TickIntervalSeconds,
+		DiscountCents: args.DiscountCents,
 	})
 	if err != nil {
 		return err
@@ -195,7 +196,7 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 			CreatedAt:  time.Now().Unix(),
 			Number:     sql.NullString{String: number, Valid: true},
 			PdfPath:    sql.NullString{String: pdfPath, Valid: true},
-			TotalCents: sql.NullInt64{Int64: doc.LineItem.TotalCents, Valid: true},
+			TotalCents: sql.NullInt64{Int64: doc.AmountDueCents(), Valid: true},
 			Currency:   sql.NullString{String: co.Currency.String, Valid: true},
 			SenderKey:  sql.NullString{String: senderKey, Valid: true},
 		})
@@ -215,7 +216,7 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	reply.InvoiceID = invoiceID
 	reply.Number = number
 	reply.PDFPath = pdfPath
-	reply.TotalCents = doc.LineItem.TotalCents
+	reply.TotalCents = doc.AmountDueCents()
 	reply.Currency = doc.Currency
 	reply.SenderKey = senderKey
 	reply.IssueDateUnix = doc.IssueDate.Unix()

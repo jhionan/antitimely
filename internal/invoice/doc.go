@@ -26,9 +26,19 @@ type InvoiceDoc struct {
 	LineItemLabel string // "Software development"
 	LineItem      LineItem
 
+	// DiscountCents is a flat reduction (in Currency) applied to the line-item
+	// total. 0 = no discount. When > 0 the PDF shows an explicit Subtotal and
+	// Discount line; AmountDueCents is the net.
+	DiscountCents int64
+
 	// Bank block to render in "Ways to pay".
 	Bank Bank
 
 	// Logo (optional; absolute path; empty = no logo).
 	LogoPath string
+}
+
+// AmountDueCents is the net payable: line-item total minus any flat discount.
+func (d InvoiceDoc) AmountDueCents() int64 {
+	return d.LineItem.TotalCents - d.DiscountCents
 }

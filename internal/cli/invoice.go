@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,12 +157,18 @@ func invoiceGenerate(args []string) int {
 	note := fs.String("note", "", "Stored in invoices.note (not printed on PDF)")
 	dryRun := fs.Bool("dry-run", false, "Render PDF to a temp file without DB writes")
 	allowEmpty := fs.Bool("allow-empty", false, "For hourly mode, allow 0-tick periods")
+	discount := fs.String("discount", "", "Flat discount in the company's currency, e.g. 50 or 50.00")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 64
 	}
+	discountCents, err := parseMoneyCents(*discount)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid --discount:", err)
+		return 64
+	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--dry-run] [--allow-empty]")
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--discount=AMOUNT] [--dry-run] [--allow-empty]")
 		return 64
 	}
 	company := fs.Arg(0)
@@ -195,6 +202,7 @@ func invoiceGenerate(args []string) int {
 		Note:          *note,
 		DryRun:        *dryRun,
 		AllowEmpty:    *allowEmpty,
+		DiscountCents: discountCents,
 	}, &reply); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -251,6 +259,27 @@ func invoiceShowSenders(args []string) int {
 	}
 	fmt.Println("Config OK.")
 	return 0
+}
+
+// parseMoneyCents parses a decimal amount ("50", "50.00", "50.5") into integer
+// cents. Empty string ⇒ 0 (no amount). Rejects negatives and >2 decimal places
+// so we never silently drop sub-cent precision.
+func parseMoneyCents(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a number", s)
+	}
+	if f < 0 {
+		return 0, fmt.Errorf("must not be negative")
+	}
+	if dot := strings.IndexByte(s, '.'); dot >= 0 && len(s)-dot-1 > 2 {
+		return 0, fmt.Errorf("%q has more than 2 decimal places", s)
+	}
+	return int64(math.Round(f * 100)), nil
 }
 
 func parseOptionalDate(s string) (int64, error) {
