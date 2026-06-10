@@ -1153,6 +1153,54 @@ func TestPipeline_Busy_PresentToIdleRegimeDropsModerate(t *testing.T) {
 	}
 }
 
+func TestPipeline_PausedProject_LowCPUWatcher_DoesNotResume(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,
+		CPUDeltaThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+
+	q := store.New(db)
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "paused-proj", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	if err := q.SetProjectPaused(ctx, store.SetProjectPausedParams{Paused: 1, Name: "paused-proj"}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	bin := "claude"
+	cwd := "/work/paused-proj/"
+	cache.Store(&CacheSnapshot{
+		AllowedBinaries:  map[string]bool{"claude": true},
+		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwd}},
+		PausedProjectIDs: map[int64]bool{projID: true},
+		ArmedProjects:    map[int64]bool{},
+	})
+	br.IdleSecondsVal = 5 // user present — but the watcher is below the busy bar
+	br.CWDByPID = map[int]string{999: "/work/paused-proj/x"}
+
+	// Idle watcher: ~2cs/poll, never reaches working.
+	base := uint64(1000)
+	for i := 0; i < 5; i++ {
+		base += 2
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: base}}
+		_ = p.RunTick(ctx, 1000+int64(i)*5)
+	}
+
+	var paused int64
+	db.QueryRow(`SELECT paused FROM projects WHERE id=?`, projID).Scan(&paused)
+	if paused != 1 {
+		t.Errorf("low-CPU watcher must not auto-resume a paused project; paused=%d, want 1", paused)
+	}
+	if !cache.Snapshot().PausedProjectIDs[projID] {
+		t.Errorf("cache should still flag project paused")
+	}
+}
+
 func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
 	p, br, cache, db := newTestPipeline(t)
 	defer db.Close()
