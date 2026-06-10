@@ -1252,3 +1252,53 @@ func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
 		t.Errorf("expected 1 agent tick after disarm, got %d", nAgent)
 	}
 }
+
+func TestPipeline_Busy_PIDReuseResetsWorkingState(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,
+		CPUDeltaThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+	cache.Store(&CacheSnapshot{AllowedBinaries: map[string]bool{"claude": true, "node": true}})
+	br.IdleSecondsVal = 5
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	// Drive PID 999 (claude) to working: prev + 2 sustained above-bar ticks.
+	ts := int64(1000)
+	for _, c := range []uint64{0, 30, 60} {
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		_ = p.RunTick(ctx, ts)
+		ts += 5
+	}
+	var afterRise int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterRise)
+	if afterRise != 1 {
+		t.Fatalf("expected 1 emit after rise, got %d", afterRise)
+	}
+
+	// PID 999 reused as a different binary "node" with a HIGHER cumulative
+	// counter (no CPU regression), so ONLY the binary-name-change path can
+	// reset state. If the reset were missing, the stale working=true would
+	// emit immediately on this tick.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "node", CPUTicks: 200}}
+	_ = p.RunTick(ctx, ts) // name change resets activity; delta is large but aboveStreak restarts at 1 → not working
+	ts += 5
+	var afterReuse1 int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterReuse1)
+	if afterReuse1 != 1 {
+		t.Fatalf("reused PID must re-accumulate rise ticks; stale working leaked (got %d emits, want 1)", afterReuse1)
+	}
+
+	// Second above-bar tick for the new process → reaches working → emits.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "node", CPUTicks: 230}}
+	_ = p.RunTick(ctx, ts)
+	var afterReuse2 int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterReuse2)
+	if afterReuse2 != 2 {
+		t.Errorf("reused PID should emit after re-accumulating rise ticks; got %d, want 2", afterReuse2)
+	}
+}

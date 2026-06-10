@@ -16,7 +16,7 @@ See `docs/superpowers/specs/2026-05-20-antitimely-design.md` for the full design
 ## Features
 
 - **Multi-project parallel tracking.** Multiple agents in different project directories all get credited simultaneously.
-- **Asymmetric idle thresholds.** When you're at the keyboard, low-CPU work counts. When you're idle, only processes doing real work (>20% of a core) count. No more overnight TUI noise.
+- **Sustained-CPU busy detection.** A tracked process must stay genuinely busy for a couple of polls before its time counts — an idle agent at a prompt or an idle watch-server no longer bills. At the keyboard the bar is low (~3% of a core); when you're idle only real compute (>20%) counts. No more overnight TUI noise.
 - **Companies → Projects.** One company can have many projects; each project belongs to one company (or none).
 - **Invoice anchors.** Record when you send an invoice to a company; the daemon then shows time billable for the *next* invoice.
 - **macOS launch-agent integration.** Boots at login, restarts on crash.
@@ -103,16 +103,18 @@ You can create rules:
 
 ### What counts as "active"
 
-Tracking only fires when the agent is *doing real work*, not just sitting at a prompt:
+Tracking only fires when the agent is *doing real work*, not just sitting at a prompt. A tracked process must stay above the CPU "busy bar" for a couple of consecutive polls (`agent_busy_rise_ticks`) before its time counts, and drop below it for a few polls (`agent_busy_fall_ticks`) before it stops — so a brief blip never starts the clock and a quiet gap between streamed tokens never stops it prematurely:
 
-- **While you're at the keyboard:** any CPU activity above 1% counts (claude streaming tokens, opencode running tools, etc.)
+- **While you're at the keyboard:** sustained CPU above ~3% of a core counts (claude streaming tokens, opencode running tools, etc.); an idle prompt (~0.4%) does not.
 - **While you're idle (> 2 minutes of no input):** only processes doing >20% CPU count, so a claude TUI waiting for your reply doesn't accumulate phantom time overnight
 
 Tune both via `~/.antitimely/config.yaml`:
 
 ```yaml
-agent_cpu_threshold: 5        # centiseconds/tick when user is active
-agent_cpu_threshold_idle: 100 # centiseconds/tick when user is idle
+agent_cpu_threshold: 15       # centiseconds/poll "busy bar" when user is active (~3% of a core)
+agent_cpu_threshold_idle: 100 # centiseconds/poll busy bar when user is idle (~20%)
+agent_busy_rise_ticks: 2      # consecutive busy polls before a process counts
+agent_busy_fall_ticks: 3      # consecutive quiet polls before it stops (hysteresis)
 idle_threshold: 2m
 ```
 
@@ -164,8 +166,10 @@ Example:
 ```yaml
 interval: 5s                      # polling interval
 idle_threshold: 2m                # idle = no kbd/mouse for this long
-agent_cpu_threshold: 5            # centi-seconds/tick to count an active-user agent
-agent_cpu_threshold_idle: 100     # centi-seconds/tick to count an idle-user agent
+agent_cpu_threshold: 15           # centi-seconds/poll busy bar for an active-user agent
+agent_cpu_threshold_idle: 100     # centi-seconds/poll busy bar for an idle-user agent
+agent_busy_rise_ticks: 2          # consecutive busy polls before counting
+agent_busy_fall_ticks: 3          # consecutive quiet polls before stopping
 ```
 
 Precedence: defaults → config file → CLI flags on `atl daemon`.
