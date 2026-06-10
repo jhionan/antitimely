@@ -19,6 +19,10 @@ type Sender struct {
 	LogoPath     string          `yaml:"logo_path"`
 	Invoice      InvoiceSeed     `yaml:"invoice"`
 	BankAccounts map[string]Bank `yaml:"bank_accounts"`
+	// OutputDir, when set, is where this sender's PDFs are written (used
+	// directly, no per-sender subfolder). Empty ⇒ fall back to the global
+	// invoice.output_dir with a <senderKey>/ subfolder. Supports ~ expansion.
+	OutputDir string `yaml:"output_dir"`
 }
 
 type InvoiceSeed struct {

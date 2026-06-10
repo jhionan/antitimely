@@ -172,11 +172,21 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		f.Close()
 		pdfPath = f.Name()
 	} else {
-		outDir, err := expandHome(cfg.Invoice.OutputDir)
-		if err != nil {
-			return err
+		// Per-sender output_dir wins and is used directly; otherwise fall back
+		// to the global output_dir with a <senderKey>/ subfolder.
+		var senderDir string
+		if sender.OutputDir != "" {
+			senderDir, err = expandHome(sender.OutputDir)
+			if err != nil {
+				return err
+			}
+		} else {
+			outDir, err := expandHome(cfg.Invoice.OutputDir)
+			if err != nil {
+				return err
+			}
+			senderDir = filepath.Join(outDir, senderKey)
 		}
-		senderDir := filepath.Join(outDir, senderKey)
 		if err := os.MkdirAll(senderDir, 0o700); err != nil {
 			return err
 		}

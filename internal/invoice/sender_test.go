@@ -14,6 +14,7 @@ senders:
     tax_id_label: "CNPJ"
     address_lines: ["Mateus Leme 2830", "curitiba", "82200000", "Paraná", "Brazil"]
     logo_path: ""
+    output_dir: "/Users/x/Documents/BR Invoices"
     invoice:
       number_prefix: "INV-"
       number_pad: 3
@@ -74,7 +75,13 @@ func TestLoadSendersConfig_ParsesValidFile(t *testing.T) {
 	if br.Invoice.NextNumber != 14 {
 		t.Errorf("br.Invoice.NextNumber = %d, want 14", br.Invoice.NextNumber)
 	}
+	if br.OutputDir != "/Users/x/Documents/BR Invoices" {
+		t.Errorf("br.OutputDir = %q, want per-sender output dir", br.OutputDir)
+	}
 	es := cfg.Senders["es"]
+	if es.OutputDir != "" {
+		t.Errorf("es.OutputDir = %q, want empty (no per-sender override)", es.OutputDir)
+	}
 	if got := es.BankAccounts["EUR"].AlsoAccepts; len(got) != 1 || got[0] != "CAD" {
 		t.Errorf("es EUR.AlsoAccepts = %v, want [CAD]", got)
 	}
