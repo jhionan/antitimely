@@ -957,6 +957,202 @@ func TestPipeline_AutoResume_ArmsAndDropsCurrentTick(t *testing.T) {
 	}
 }
 
+func TestPipeline_Busy_RiseRequiresSustainedTicks(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,
+		CPUDeltaThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+	cache.Store(&CacheSnapshot{AllowedBinaries: map[string]bool{"claude": true}})
+	br.IdleSecondsVal = 5 // present → busy bar 15
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	// Tick 1: establish prev (no delta yet).
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 0}}
+	_ = p.RunTick(ctx, 1000)
+	// Tick 2: delta 30 ≥ 15 → aboveStreak=1, not yet working (riseTicks=2).
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 30}}
+	_ = p.RunTick(ctx, 1005)
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("after 1 above-bar tick, expected 0 emits (rise not met), got %d", n)
+	}
+	// Tick 3: delta 30 ≥ 15 → aboveStreak=2 → working → emit.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 60}}
+	_ = p.RunTick(ctx, 1010)
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("after 2 sustained above-bar ticks, expected 1 emit, got %d", n)
+	}
+}
+
+func TestPipeline_Busy_SingleBlipNeverFlips(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,
+		CPUDeltaThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+	cache.Store(&CacheSnapshot{AllowedBinaries: map[string]bool{"claude": true}})
+	br.IdleSecondsVal = 5
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 0}}
+	_ = p.RunTick(ctx, 1000) // prev
+	// One blip above, then quiet.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 40}}
+	_ = p.RunTick(ctx, 1005) // aboveStreak=1
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 42}}
+	_ = p.RunTick(ctx, 1010) // delta 2 < 15 → belowStreak resets above
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 44}}
+	_ = p.RunTick(ctx, 1015) // delta 2 < 15
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 0 {
+		t.Errorf("a single above-bar blip must never reach working; got %d emits", n)
+	}
+}
+
+func TestPipeline_Busy_FallHysteresisBridgesDips(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,
+		CPUDeltaThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+	cache.Store(&CacheSnapshot{AllowedBinaries: map[string]bool{"claude": true}})
+	br.IdleSecondsVal = 5
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	// Drive to working: prev + 2 sustained above-bar ticks.
+	seq := []uint64{0, 30, 60} // deltas: -, 30, 30
+	ts := int64(1000)
+	for _, c := range seq {
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		_ = p.RunTick(ctx, ts)
+		ts += 5
+	}
+	var afterRise int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterRise)
+	if afterRise != 1 {
+		t.Fatalf("expected working+1 emit after rise, got %d", afterRise)
+	}
+
+	// One dip below bar (delta 2) then back above (delta 30). fallTicks=3, so a
+	// single dip must NOT drop working — the dip tick itself still emits.
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 62}}
+	_ = p.RunTick(ctx, ts) // delta 2 < 15 → belowStreak=1, still working → emit
+	ts += 5
+	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 92}}
+	_ = p.RunTick(ctx, ts) // delta 30 → above resets belowStreak → emit
+	ts += 5
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	if n != 3 {
+		t.Errorf("expected 3 emits (rise tick + dip tick + recovery tick), got %d", n)
+	}
+}
+
+func TestPipeline_Busy_FallStopsAfterSustainedQuiet(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,
+		CPUDeltaThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+	cache.Store(&CacheSnapshot{AllowedBinaries: map[string]bool{"claude": true}})
+	br.IdleSecondsVal = 5
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	// Rise to working: prev + 2 sustained above-bar ticks.
+	ts := int64(1000)
+	for _, c := range []uint64{0, 30, 60} {
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		_ = p.RunTick(ctx, ts)
+		ts += 5
+	}
+	// Now quiet ticks (delta 1 each, below bar). With fall=3: belowStreak 1,2
+	// keep working (emit), belowStreak 3 flips working off in the same tick
+	// BEFORE the emit gate (no emit), and subsequent quiet ticks don't emit.
+	base := uint64(60)
+	for range 5 {
+		base += 1 // delta 1 < 15
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: base}}
+		_ = p.RunTick(ctx, ts)
+		ts += 5
+	}
+
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
+	// Rise emitted 1. Quiet ticks: belowStreak 1 (emit), 2 (emit), 3→stop (no
+	// emit), then no emits. Total = 1 + 2 = 3.
+	if n != 3 {
+		t.Errorf("expected 3 total emits (1 rise + 2 quiet-while-working), got %d", n)
+	}
+}
+
+func TestPipeline_Busy_PresentToIdleRegimeDropsModerate(t *testing.T) {
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec:   120,
+		CPUDeltaThresh:     15,  // present bar
+		CPUDeltaThreshIdle: 100, // idle bar
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
+	})
+	defer db.Close()
+	ctx := context.Background()
+	cache.Store(&CacheSnapshot{AllowedBinaries: map[string]bool{"claude": true}})
+	br.CWDByPID = map[int]string{999: "/work/x"}
+
+	// Present: a moderate ~50cs/poll process rises to working (above 15).
+	br.IdleSecondsVal = 5
+	c := uint64(0)
+	ts := int64(1000)
+	for range 3 { // prev + 2 above-bar ⇒ working, last tick emits
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		_ = p.RunTick(ctx, ts)
+		c += 50
+		ts += 5
+	}
+	var afterRise int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterRise)
+	if afterRise != 1 {
+		t.Fatalf("present moderate process should rise to working (1 emit), got %d", afterRise)
+	}
+
+	// User leaves: bar jumps to 100. The same ~50cs/poll is now below bar →
+	// belowStreak accrues; ticks 1,2 still emit (working), tick 3 flips off.
+	br.IdleSecondsVal = 200
+	for range 4 {
+		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		_ = p.RunTick(ctx, ts)
+		c += 50
+		ts += 5
+	}
+	var total int
+	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&total)
+	// 1 (rise) + 2 (belowStreak 1,2 while still working) = 3; tick 3 drops it.
+	if total != 3 {
+		t.Errorf("moderate process should stop counting after going idle; got %d emits, want 3", total)
+	}
+}
+
 func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
 	p, br, cache, db := newTestPipeline(t)
 	defer db.Close()

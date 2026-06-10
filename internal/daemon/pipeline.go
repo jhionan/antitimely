@@ -23,6 +23,16 @@ type PipelineConfig struct {
 	// that stops arming from permanently dropping billable time when window
 	// title capture — the normal focus-disarm path — is unavailable.
 	AutoDisarmAgentTicks int
+	// AgentBusyRiseTicks is how many consecutive ticks a tracked process's CPU
+	// delta must stay at/above the busy bar before it is considered "working"
+	// and starts emitting agent signals. 0 or 1 ⇒ a single above-bar tick
+	// counts (legacy behavior). Default 2.
+	AgentBusyRiseTicks int
+	// AgentBusyFallTicks is how many consecutive ticks below the busy bar a
+	// "working" process must accumulate before it stops emitting (hysteresis,
+	// so brief dips between streamed tokens / build phases don't flicker it
+	// off). 0 or 1 ⇒ a single below-bar tick stops it. Default 3.
+	AgentBusyFallTicks int
 }
 
 // procClass is what the agent loop remembers about a PID after its first
@@ -33,6 +43,16 @@ type procClass struct {
 	name  string // binary name captured at classification; mismatch ⇒ PID reuse
 	cwd   string // looked up via lsof; reused on subsequent emits
 	track bool   // false ⇒ skip this PID for the rest of its life
+}
+
+// activityState is the per-PID hysteresis state for the busy classifier. A
+// tracked process emits agent signals only while working==true. aboveStreak /
+// belowStreak count consecutive ticks the CPU delta has been at/above or below
+// the regime's busy bar; whichever side accumulates enough flips working.
+type activityState struct {
+	working     bool
+	aboveStreak int
+	belowStreak int
 }
 
 type Pipeline struct {
@@ -46,7 +66,13 @@ type Pipeline struct {
 	// cache snapshot pointer changes (rule/watch mutation) or when PID
 	// reuse is detected via binary-name change or CPU regression.
 	procClass map[int]procClass
-	lastSnap  *CacheSnapshot
+	// procActivity is the per-PID busy/idle hysteresis state. Pruned for dead
+	// PIDs in the same deferred sweep as prevCPU/procClass, and reset (deleted)
+	// on PID reuse / CPU regression alongside procClass. Deliberately NOT
+	// cleared on a cache-snapshot swap: busy/idle is a function of observed CPU,
+	// independent of rule changes, so hysteresis state should survive a reload.
+	procActivity map[int]activityState
+	lastSnap     *CacheSnapshot
 	perm      *PermissionTracker
 	// armedAgentStreak counts ticks of matching agent activity (user present)
 	// accumulated by an armed project toward the AutoDisarmAgentTicks
@@ -68,6 +94,7 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 		q: q, bridge: b, cache: cache, cfg: cfg,
 		prevCPU:          map[int]uint64{},
 		procClass:        map[int]procClass{},
+		procActivity:     map[int]activityState{},
 		armedAgentStreak: map[int64]int{},
 	}
 }
@@ -307,6 +334,11 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				delete(p.procClass, pid)
 			}
 		}
+		for pid := range p.procActivity {
+			if !livePIDs[pid] {
+				delete(p.procActivity, pid)
+			}
+		}
 	}()
 
 	procs, err := p.bridge.ListProcesses(ctx)
@@ -338,6 +370,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		// drop the cached classification before any further check.
 		if cached, ok := p.procClass[proc.PID]; ok && cached.name != proc.Name {
 			delete(p.procClass, proc.PID)
+			delete(p.procActivity, proc.PID)
 		}
 
 		// CPU counters are monotonic within a process; a regression means
@@ -345,9 +378,29 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		// tick — the next tick will reclassify against the new process.
 		if proc.CPUTicks < prev {
 			delete(p.procClass, proc.PID)
+			delete(p.procActivity, proc.PID)
 			continue
 		}
-		if proc.CPUTicks-prev < threshold {
+
+		delta := proc.CPUTicks - prev
+		rise := max(p.cfg.AgentBusyRiseTicks, 1)
+		fall := max(p.cfg.AgentBusyFallTicks, 1)
+		st := p.procActivity[proc.PID]
+		if delta >= threshold {
+			st.aboveStreak++
+			st.belowStreak = 0
+			if !st.working && st.aboveStreak >= rise {
+				st.working = true
+			}
+		} else {
+			st.belowStreak++
+			st.aboveStreak = 0
+			if st.working && st.belowStreak >= fall {
+				st.working = false
+			}
+		}
+		p.procActivity[proc.PID] = st
+		if !st.working {
 			continue
 		}
 
