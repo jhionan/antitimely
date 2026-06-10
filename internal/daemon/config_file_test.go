@@ -57,3 +57,17 @@ func TestFileConfig_ApplyTo_BadDuration(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestFileConfig_ApplyTo_AgentBusyTicks(t *testing.T) {
+	cfg := Config{}
+	fc := FileConfig{AgentBusyRiseTicks: 4, AgentBusyFallTicks: 6}
+	if err := fc.ApplyTo(&cfg); err != nil {
+		t.Fatalf("ApplyTo: %v", err)
+	}
+	if cfg.AgentBusyRiseTicks != 4 {
+		t.Errorf("AgentBusyRiseTicks = %d, want 4", cfg.AgentBusyRiseTicks)
+	}
+	if cfg.AgentBusyFallTicks != 6 {
+		t.Errorf("AgentBusyFallTicks = %d, want 6", cfg.AgentBusyFallTicks)
+	}
+}

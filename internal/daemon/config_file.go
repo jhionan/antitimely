@@ -18,6 +18,8 @@ type FileConfig struct {
 	IdleThreshold         string `yaml:"idle_threshold,omitempty"`
 	AgentCPUThreshold     uint64 `yaml:"agent_cpu_threshold,omitempty"`
 	AgentCPUThresholdIdle uint64 `yaml:"agent_cpu_threshold_idle,omitempty"`
+	AgentBusyRiseTicks    int    `yaml:"agent_busy_rise_ticks,omitempty"`
+	AgentBusyFallTicks    int    `yaml:"agent_busy_fall_ticks,omitempty"`
 	SocketPath            string `yaml:"socket_path,omitempty"`
 	DBPath                string `yaml:"db_path,omitempty"`
 	PIDPath               string `yaml:"pid_path,omitempty"`
@@ -79,6 +81,12 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 	if fc.AgentCPUThresholdIdle != 0 {
 		cfg.AgentCPUThreshIdle = fc.AgentCPUThresholdIdle
 	}
+	if fc.AgentBusyRiseTicks != 0 {
+		cfg.AgentBusyRiseTicks = fc.AgentBusyRiseTicks
+	}
+	if fc.AgentBusyFallTicks != 0 {
+		cfg.AgentBusyFallTicks = fc.AgentBusyFallTicks
+	}
 	if fc.SocketPath != "" {
 		p, err := expandHome(fc.SocketPath)
 		if err != nil {
@@ -132,15 +140,22 @@ interval: 5s
 # counting regardless of user idle.
 idle_threshold: 2m
 
-# CPU threshold for agent processes when the user is ACTIVE. Lower = more
-# permissive. 5 centi = ~1% of one core averaged over a 5s tick.
-agent_cpu_threshold: 5
+# CPU "busy bar" for agent processes when the user is ACTIVE (centiseconds of
+# CPU per poll). A process must stay at/above this for agent_busy_rise_ticks
+# polls before its time counts. ~15 ≈ 3% of one core; low enough that an LLM
+# agent thinking/streaming counts, high enough to ignore an idle prompt (~2cs).
+agent_cpu_threshold: 15
 
-# CPU threshold for agent processes when the user has been IDLE past
-# idle_threshold. Should be much higher than agent_cpu_threshold so that
-# background TUI redraws don't get counted overnight. 100 centi = ~20% of
-# one core. Real inference / heavy builds easily clear this; idle TUIs don't.
+# CPU busy bar when the user has been IDLE past idle_threshold. Higher so that
+# only genuine heavy compute counts once you've stepped away — idle dev servers
+# and idle agents fall below it and stop billing.
 agent_cpu_threshold_idle: 100
+
+# Consecutive above-bar polls before a process is counted as working (~rise*interval seconds).
+agent_busy_rise_ticks: 2
+
+# Consecutive below-bar polls before a working process stops counting (hysteresis).
+agent_busy_fall_ticks: 3
 
 # Override paths (defaults shown). Useful if you want state in a non-default
 # location. Leave commented to use the defaults under ~/.antitimely/.

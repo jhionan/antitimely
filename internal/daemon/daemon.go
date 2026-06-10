@@ -29,6 +29,8 @@ type Config struct {
 	IdleThresholdSec   int
 	AgentCPUThresh     uint64
 	AgentCPUThreshIdle uint64
+	AgentBusyRiseTicks int
+	AgentBusyFallTicks int
 	SocketPath         string
 	DBPath             string
 	PIDPath            string
@@ -43,8 +45,10 @@ func DefaultConfig() (Config, error) {
 	return Config{
 		IntervalSeconds:    5,
 		IdleThresholdSec:   120,
-		AgentCPUThresh:     5,
+		AgentCPUThresh:     15,
 		AgentCPUThreshIdle: 100,
+		AgentBusyRiseTicks: 2,
+		AgentBusyFallTicks: 3,
 		SocketPath:         filepath.Join(dir, "antitimely.sock"),
 		DBPath:             filepath.Join(dir, "db.sqlite"),
 		PIDPath:            filepath.Join(dir, "antitimely.pid"),
@@ -130,6 +134,8 @@ func Run(cfg Config, schemaSQL string) error {
 		CPUDeltaThresh:       cfg.AgentCPUThresh,
 		CPUDeltaThreshIdle:   cfg.AgentCPUThreshIdle,
 		AutoDisarmAgentTicks: autoDisarmTicks,
+		AgentBusyRiseTicks:   cfg.AgentBusyRiseTicks,
+		AgentBusyFallTicks:   cfg.AgentBusyFallTicks,
 	})
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
