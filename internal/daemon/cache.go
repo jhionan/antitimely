@@ -53,6 +53,10 @@ func NewCache() *Cache {
 func (c *Cache) Snapshot() *CacheSnapshot { return c.ptr.Load() }
 func (c *Cache) Store(s *CacheSnapshot)   { c.ptr.Store(s) }
 
+// swapForTest installs a snapshot directly. Test-only; production swaps via
+// ReloadCache.
+func (c *Cache) swapForTest(s *CacheSnapshot) { c.ptr.Store(s) }
+
 // AddSuppressed records one agent tick suppressed because its project is armed,
 // returning the running count for that project.
 func (c *Cache) AddSuppressed(id int64) int {

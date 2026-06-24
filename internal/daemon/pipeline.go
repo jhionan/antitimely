@@ -33,6 +33,15 @@ type PipelineConfig struct {
 	// so brief dips between streamed tokens / build phases don't flicker it
 	// off). 0 or 1 ⇒ a single below-bar tick stops it. Default 3.
 	AgentBusyFallTicks int
+	// TranscriptTracking enables the Claude Code transcript signal source.
+	TranscriptTracking bool
+	// TranscriptRoot is the dir holding per-cwd session subdirs
+	// (~/.claude/projects). Empty ⇒ transcript tracking is inert.
+	TranscriptRoot string
+	// TranscriptGraceSec: a session counts as actively worked for this many
+	// seconds after its newest turn, stitching gaps between turns into one
+	// continuous billable block.
+	TranscriptGraceSec int
 }
 
 // procClass is what the agent loop remembers about a PID after its first
@@ -53,6 +62,14 @@ type activityState struct {
 	working     bool
 	aboveStreak int
 	belowStreak int
+}
+
+// transcriptSession is per-session-file bookkeeping so each tick only reads new
+// tail bytes rather than re-parsing the whole transcript.
+type transcriptSession struct {
+	offset       int64  // bytes consumed so far
+	lastActivity int64  // unix seconds of newest entry seen
+	cwd          string // authoritative cwd from the transcript body
 }
 
 type Pipeline struct {
@@ -83,6 +100,9 @@ type Pipeline struct {
 	// while denied churns (and can leak) osascript processes; we back off and
 	// only re-probe periodically. 0 = no backoff in effect.
 	titleRetryAt int64
+	// transcriptState is per-session-file tail/offset + last-activity state,
+	// keyed by absolute .jsonl path.
+	transcriptState map[string]transcriptSession
 }
 
 // titleDenyBackoffSec is how long to stop spawning the window-title osascript
@@ -96,6 +116,7 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 		procClass:        map[int]procClass{},
 		procActivity:     map[int]activityState{},
 		armedAgentStreak: map[int64]int{},
+		transcriptState:  map[string]transcriptSession{},
 	}
 }
 
