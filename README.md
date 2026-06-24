@@ -118,6 +118,24 @@ agent_busy_fall_ticks: 3      # consecutive quiet polls before it stops (hystere
 idle_threshold: 2m
 ```
 
+### Tracking signals: focus, agent CPU, and transcripts
+
+The daemon combines three independent signals to track work:
+
+- **Focus signal** — your foreground window's application and title (tells which project you're looking at)
+- **Agent CPU signal** — processes matching your allowlist burning sustained CPU in a tracked project directory (picks up work the process is doing, and credits it even when you've switched windows)
+- **Transcript signal** — Claude Code sessions actively writing transcripts to a tracked project directory (captures remote work and planning sessions that generate no local CPU or window focus)
+
+Transcript activity **overrides pause** — if a project is paused but you're actively working on it via Claude Code, the daemon resumes ticking automatically. Transcript counting stops when the session is idle for longer than the grace period (default 10 minutes).
+
+Configure via:
+
+```yaml
+transcript_tracking: true         # enable transcript watching
+transcript_grace: 10m             # session counts this long after last turn
+transcript_root: ~/.claude/projects
+```
+
 ### Generating work summaries
 
 `atl summary` emits a markdown report combining tracked hours per project with the git commits in each project's directory for the same date range — perfect for piping into a coding agent that polishes it into an invoice description.

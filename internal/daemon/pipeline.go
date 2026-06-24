@@ -33,6 +33,15 @@ type PipelineConfig struct {
 	// so brief dips between streamed tokens / build phases don't flicker it
 	// off). 0 or 1 ⇒ a single below-bar tick stops it. Default 3.
 	AgentBusyFallTicks int
+	// TranscriptTracking enables the Claude Code transcript signal source.
+	TranscriptTracking bool
+	// TranscriptRoot is the dir holding per-cwd session subdirs
+	// (~/.claude/projects). Empty ⇒ transcript tracking is inert.
+	TranscriptRoot string
+	// TranscriptGraceSec: a session counts as actively worked for this many
+	// seconds after its newest turn, stitching gaps between turns into one
+	// continuous billable block.
+	TranscriptGraceSec int
 }
 
 // procClass is what the agent loop remembers about a PID after its first
@@ -53,6 +62,14 @@ type activityState struct {
 	working     bool
 	aboveStreak int
 	belowStreak int
+}
+
+// transcriptSession is per-session-file bookkeeping so each tick only reads new
+// tail bytes rather than re-parsing the whole transcript.
+type transcriptSession struct {
+	offset       int64  // bytes consumed so far
+	lastActivity int64  // unix seconds of newest entry seen
+	cwd          string // authoritative cwd from the transcript body
 }
 
 type Pipeline struct {
@@ -83,6 +100,9 @@ type Pipeline struct {
 	// while denied churns (and can leak) osascript processes; we back off and
 	// only re-probe periodically. 0 = no backoff in effect.
 	titleRetryAt int64
+	// transcriptState is per-session-file tail/offset + last-activity state,
+	// keyed by absolute .jsonl path.
+	transcriptState map[string]transcriptSession
 }
 
 // titleDenyBackoffSec is how long to stop spawning the window-title osascript
@@ -96,6 +116,7 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 		procClass:        map[int]procClass{},
 		procActivity:     map[int]activityState{},
 		armedAgentStreak: map[int64]int{},
+		transcriptState:  map[string]transcriptSession{},
 	}
 }
 
@@ -144,6 +165,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		}
 	}
 	signals = append(signals, p.collectAgentSignals(ctx, snap, userPresent)...)
+	signals = append(signals, p.collectTranscriptSignals(snap, now)...)
 
 	if len(signals) == 0 {
 		return nil
@@ -156,6 +178,11 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	// bookkeeping when several PIDs map to the same armed project in one tick.
 	disarmedThisTick := map[int64]bool{}
 	armedCountedThisTick := map[int64]bool{}
+	// tickedThisTick prevents a transcript signal from double-ticking a project
+	// already counted via focus or agent in this cycle. Transcript signals are
+	// appended last so focus/agent ticks register first.
+	// Row-count hygiene only; ultimate per-project dedup is COUNT(DISTINCT ts) in the totals queries.
+	tickedThisTick := map[int64]bool{}
 
 	for _, sig := range signals {
 		obsID, err := p.q.UpsertObservation(ctx, store.UpsertObservationParams{
@@ -181,16 +208,18 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 
 		pid := domain.MatchRules(sig, snap.Rules)
 
-		if sig.IsFocus() && pid != nil {
+		if (sig.IsFocus() || sig.IsTranscript()) && pid != nil {
 			p.cache.DisarmProject(*pid)
 			delete(p.armedAgentStreak, *pid)
 			disarmedThisTick[*pid] = true
 		}
 
 		// Paused projects:
+		//   * Transcript signal ⇒ real human-directed work captured: auto-resume
+		//     and count this tick immediately (fall through to InsertTick).
 		//   * Agent signal while the user is present ⇒ fresh CPU activity in a
-		//     tracked dir is a strong "user is back at work" signal: auto-resume
-		//     and let the tick land.
+		//     tracked dir is a strong "user is back at work" signal: auto-resume,
+		//     arm, and drop this tick (next tick counts after disarm).
 		//   * Agent signal while the user is idle ⇒ unattended background CPU
 		//     (dev servers, language servers, AI agents, builds) that must NOT
 		//     resurrect a paused project. Without this gate a paused project
@@ -199,18 +228,31 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		//     a signal; still skip the tick. The observation is already upserted
 		//     above so it survives in review history.
 		if pid != nil && snap.PausedProjectIDs[*pid] {
-			if !sig.IsAgent() || !userPresent {
+			switch {
+			case sig.IsTranscript():
+				// Real work — resume and let this tick count.
+				if err := p.q.ResumeProjectByID(ctx, *pid); err != nil {
+					log.Printf("auto-resume project %d: %v", *pid, err)
+					continue
+				}
+				p.cache.MarkProjectActive(*pid)
+				delete(p.armedAgentStreak, *pid)
+				disarmedThisTick[*pid] = true
+				log.Printf("auto-resumed project %d: transcript activity (cwd=%q)", *pid, sig.Cwd)
+				// fall through to InsertTick below.
+			case sig.IsAgent() && userPresent:
+				if err := p.q.ResumeProjectByID(ctx, *pid); err != nil {
+					log.Printf("auto-resume project %d: %v", *pid, err)
+					continue
+				}
+				p.cache.MarkProjectActive(*pid)
+				p.cache.ArmProject(*pid)
+				delete(p.armedAgentStreak, *pid)
+				log.Printf("auto-resumed project %d: agent activity (binary=%q cwd=%q)", *pid, sig.BinaryName, sig.Cwd)
+				continue
+			default:
 				continue
 			}
-			if err := p.q.ResumeProjectByID(ctx, *pid); err != nil {
-				log.Printf("auto-resume project %d: %v", *pid, err)
-				continue
-			}
-			p.cache.MarkProjectActive(*pid)
-			p.cache.ArmProject(*pid)
-			delete(p.armedAgentStreak, *pid)
-			log.Printf("auto-resumed project %d: agent activity (binary=%q cwd=%q)", *pid, sig.BinaryName, sig.Cwd)
-			continue
 		}
 
 		// Arming gate for agent signals. An armed project's background CPU
@@ -255,6 +297,13 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			}
 		}
 
+		// Dedup: transcript must not double-tick a project already counted by
+		// focus or agent this cycle. Transcript signals are appended last so
+		// focus/agent ticks register first into tickedThisTick.
+		if pid != nil && sig.IsTranscript() && tickedThisTick[*pid] {
+			continue
+		}
+
 		var projectID sql.NullInt64
 		if pid != nil {
 			projectID = sql.NullInt64{Int64: *pid, Valid: true}
@@ -263,6 +312,10 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			Ts: now, ObservationID: obsID, ProjectID: projectID,
 		}); err != nil {
 			log.Printf("insert tick: %v", err)
+			continue
+		}
+		if pid != nil {
+			tickedThisTick[*pid] = true
 		}
 	}
 

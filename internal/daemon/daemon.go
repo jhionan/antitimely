@@ -34,6 +34,9 @@ type Config struct {
 	SocketPath         string
 	DBPath             string
 	PIDPath            string
+	TranscriptTracking bool
+	TranscriptGraceSec int
+	TranscriptRoot     string
 }
 
 func DefaultConfig() (Config, error) {
@@ -52,6 +55,9 @@ func DefaultConfig() (Config, error) {
 		SocketPath:         filepath.Join(dir, "antitimely.sock"),
 		DBPath:             filepath.Join(dir, "db.sqlite"),
 		PIDPath:            filepath.Join(dir, "antitimely.pid"),
+		TranscriptTracking: true,
+		TranscriptGraceSec: 600,
+		TranscriptRoot:     defaultTranscriptRoot(),
 	}, nil
 }
 
@@ -103,6 +109,9 @@ func Run(cfg Config, schemaSQL string) error {
 			return fmt.Errorf("migrate %q: %w", q, err)
 		}
 	}
+	if err := migrateObservationsSourceCheck(db); err != nil {
+		return fmt.Errorf("migrate observations source: %w", err)
+	}
 
 	bridge := &macos.RealBridge{}
 	cache := NewCache()
@@ -115,6 +124,8 @@ func Run(cfg Config, schemaSQL string) error {
 		TickIntervalSeconds: cfg.IntervalSeconds,
 		Perm:                pt,
 		StartedAtUnix:       time.Now().Unix(),
+		TranscriptRoot:      cfg.TranscriptRoot,
+		TranscriptGraceSec:  cfg.TranscriptGraceSec,
 	}
 	if err := svc.ReloadCache(); err != nil {
 		return fmt.Errorf("initial cache load: %w", err)
@@ -136,6 +147,9 @@ func Run(cfg Config, schemaSQL string) error {
 		AutoDisarmAgentTicks: autoDisarmTicks,
 		AgentBusyRiseTicks:   cfg.AgentBusyRiseTicks,
 		AgentBusyFallTicks:   cfg.AgentBusyFallTicks,
+		TranscriptTracking:   cfg.TranscriptTracking,
+		TranscriptRoot:       cfg.TranscriptRoot,
+		TranscriptGraceSec:   cfg.TranscriptGraceSec,
 	})
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)

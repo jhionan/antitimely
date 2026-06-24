@@ -4,8 +4,9 @@ package domain
 type Source string
 
 const (
-	SourceFocus Source = "focus"
-	SourceAgent Source = "agent"
+	SourceFocus      Source = "focus"
+	SourceAgent      Source = "agent"
+	SourceTranscript Source = "transcript"
 )
 
 // Signal is one observation produced by the polling loop in a single tick.
@@ -19,8 +20,9 @@ type Signal struct {
 	Cwd         string
 }
 
-func (s Signal) IsAgent() bool { return s.Source == SourceAgent }
-func (s Signal) IsFocus() bool { return s.Source == SourceFocus }
+func (s Signal) IsAgent() bool      { return s.Source == SourceAgent }
+func (s Signal) IsFocus() bool      { return s.Source == SourceFocus }
+func (s Signal) IsTranscript() bool { return s.Source == SourceTranscript }
 
 // RuleSpec is a rule as it lives in memory inside the daemon's cache.
 // Match columns use *string: nil = "don't care", non-nil = check this clause.

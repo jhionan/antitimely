@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority);
 -- (SQLite UNIQUE treats NULL != NULL otherwise).
 CREATE TABLE IF NOT EXISTS observations (
     id              INTEGER PRIMARY KEY,
-    source          TEXT NOT NULL CHECK (source IN ('focus', 'agent')),
+    source          TEXT NOT NULL CHECK (source IN ('focus', 'agent', 'transcript')),
     bundle_id       TEXT NOT NULL DEFAULT '',
     window_title    TEXT NOT NULL DEFAULT '',
     binary_name     TEXT NOT NULL DEFAULT '',

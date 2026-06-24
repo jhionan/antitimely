@@ -23,6 +23,9 @@ type FileConfig struct {
 	SocketPath            string `yaml:"socket_path,omitempty"`
 	DBPath                string `yaml:"db_path,omitempty"`
 	PIDPath               string `yaml:"pid_path,omitempty"`
+	TranscriptTracking    *bool  `yaml:"transcript_tracking,omitempty"`
+	TranscriptGrace       string `yaml:"transcript_grace,omitempty"`
+	TranscriptRoot        string `yaml:"transcript_root,omitempty"`
 }
 
 // DefaultConfigFilePath returns ~/.antitimely/config.yaml.
@@ -108,7 +111,40 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 		}
 		cfg.PIDPath = p
 	}
+	if fc.TranscriptTracking != nil {
+		cfg.TranscriptTracking = *fc.TranscriptTracking
+	}
+	if fc.TranscriptGrace != "" {
+		d, err := time.ParseDuration(fc.TranscriptGrace)
+		if err != nil {
+			return fmt.Errorf("transcript_grace: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("transcript_grace: must be positive, got %q", fc.TranscriptGrace)
+		}
+		cfg.TranscriptGraceSec = int(d.Seconds())
+	}
+	if fc.TranscriptRoot != "" {
+		p, err := expandHome(fc.TranscriptRoot)
+		if err != nil {
+			return fmt.Errorf("transcript_root: %w", err)
+		}
+		cfg.TranscriptRoot = p
+	}
 	return nil
+}
+
+// defaultTranscriptRoot is $CLAUDE_CONFIG_DIR/projects when set, else
+// ~/.claude/projects.
+func defaultTranscriptRoot() string {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "projects")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "projects")
 }
 
 // expandHome resolves a leading "~" to the current user's home directory.
@@ -162,5 +198,12 @@ agent_busy_fall_ticks: 3
 # socket_path: ~/.antitimely/antitimely.sock
 # db_path:     ~/.antitimely/db.sqlite
 # pid_path:    ~/.antitimely/antitimely.pid
+
+# Count Claude Code work (incl. remote-driven and planning sessions) by watching
+# session transcripts. Captures work that produces no local CPU/focus. Transcript
+# activity overrides pause; counting continues until <grace> after the last turn.
+# transcript_tracking: true
+# transcript_grace: 10m          # a session counts this long after its last turn
+# transcript_root: ~/.claude/projects
 `
 }
