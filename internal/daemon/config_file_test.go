@@ -71,3 +71,56 @@ func TestFileConfig_ApplyTo_AgentBusyTicks(t *testing.T) {
 		t.Errorf("AgentBusyFallTicks = %d, want 6", cfg.AgentBusyFallTicks)
 	}
 }
+
+// defaultFileConfigForTest builds a Config with defaults applied and (if yaml
+// is non-empty) overrides from that YAML applied via LoadFileConfig + ApplyTo.
+func defaultFileConfigForTest(t *testing.T, yaml string) Config {
+	t.Helper()
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig: %v", err)
+	}
+	if yaml == "" {
+		return cfg
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fc, err := LoadFileConfig(p)
+	if err != nil {
+		t.Fatalf("LoadFileConfig: %v", err)
+	}
+	if err := fc.ApplyTo(&cfg); err != nil {
+		t.Fatalf("ApplyTo: %v", err)
+	}
+	return cfg
+}
+
+func TestParseConfig_TranscriptDefaultsAndOverrides(t *testing.T) {
+	// Defaults: tracking on, 600s grace, non-empty root.
+	def := defaultFileConfigForTest(t, "")
+	if !def.TranscriptTracking {
+		t.Fatal("transcript tracking should default on")
+	}
+	if def.TranscriptGraceSec != 600 {
+		t.Fatalf("grace default = %d, want 600", def.TranscriptGraceSec)
+	}
+	if def.TranscriptRoot == "" {
+		t.Fatal("transcript root should default to a path")
+	}
+
+	// Overrides.
+	yaml := "transcript_tracking: false\ntranscript_grace: 5m\ntranscript_root: /tmp/x\n"
+	cfg := defaultFileConfigForTest(t, yaml)
+	if cfg.TranscriptTracking {
+		t.Fatal("override should disable tracking")
+	}
+	if cfg.TranscriptGraceSec != 300 {
+		t.Fatalf("grace = %d, want 300", cfg.TranscriptGraceSec)
+	}
+	if cfg.TranscriptRoot != "/tmp/x" {
+		t.Fatalf("root = %q, want /tmp/x", cfg.TranscriptRoot)
+	}
+}

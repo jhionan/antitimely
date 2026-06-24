@@ -23,6 +23,9 @@ type FileConfig struct {
 	SocketPath            string `yaml:"socket_path,omitempty"`
 	DBPath                string `yaml:"db_path,omitempty"`
 	PIDPath               string `yaml:"pid_path,omitempty"`
+	TranscriptTracking    *bool  `yaml:"transcript_tracking,omitempty"`
+	TranscriptGrace       string `yaml:"transcript_grace,omitempty"`
+	TranscriptRoot        string `yaml:"transcript_root,omitempty"`
 }
 
 // DefaultConfigFilePath returns ~/.antitimely/config.yaml.
@@ -108,7 +111,33 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 		}
 		cfg.PIDPath = p
 	}
+	if fc.TranscriptTracking != nil {
+		cfg.TranscriptTracking = *fc.TranscriptTracking
+	}
+	if fc.TranscriptGrace != "" {
+		if d, err := time.ParseDuration(fc.TranscriptGrace); err == nil && d > 0 {
+			cfg.TranscriptGraceSec = int(d.Seconds())
+		}
+	}
+	if fc.TranscriptRoot != "" {
+		if p, err := expandHome(fc.TranscriptRoot); err == nil {
+			cfg.TranscriptRoot = p
+		}
+	}
 	return nil
+}
+
+// defaultTranscriptRoot is $CLAUDE_CONFIG_DIR/projects when set, else
+// ~/.claude/projects.
+func defaultTranscriptRoot() string {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "projects")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "projects")
 }
 
 // expandHome resolves a leading "~" to the current user's home directory.
