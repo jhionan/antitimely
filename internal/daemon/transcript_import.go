@@ -60,11 +60,19 @@ func importTranscripts(db *sql.DB, q *store.Queries, snap *CacheSnapshot, root s
 				continue
 			}
 			for _, blk := range splitBlocks(stamps, int64(graceSec)) {
+				win := int64(intervalSec) - 1
 				for ts := blk[0]; ts <= blk[1]; ts += int64(intervalSec) {
+					// Skip if the project already has a tick within one interval
+					// (wall-clock) of this candidate. The daemon's live grid and
+					// the transcript grid have independent phases, so an exact-ts
+					// check almost never matches over already-tracked time and
+					// would re-lay a shifted grid — double-counting in
+					// COUNT(DISTINCT ts). The ±(interval-1) window collapses that
+					// overlap while still filling genuine gaps. (Own prior inserts
+					// are exactly `interval` apart, so they never block the next.)
 					var exists int
-					db.QueryRowContext(ctx, `SELECT 1 FROM ticks WHERE ts=? AND project_id=?`, ts, *pid).Scan(&exists)
+					db.QueryRowContext(ctx, `SELECT 1 FROM ticks WHERE project_id=? AND ts BETWEEN ? AND ?`, *pid, ts-win, ts+win).Scan(&exists)
 					if exists == 1 {
-						// Row-count hygiene only; ultimate per-project dedup is COUNT(DISTINCT ts) in the totals queries.
 						continue
 					}
 					if err := q.InsertTick(ctx, store.InsertTickParams{
