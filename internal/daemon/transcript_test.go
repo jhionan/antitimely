@@ -3,8 +3,10 @@ package daemon
 import "testing"
 
 func TestDecodeProjectDir(t *testing.T) {
-	got := decodeProjectDir("-Users-rian-focaApp-bclouder-daas-daas--back--end")
-	want := "/Users/rian/focaApp/bclouder/daas/daas-back-end"
+	// decode is intentionally lossy (Claude Code does not escape literal '-'),
+	// so test a dash-free path; the authoritative cwd comes from the jsonl body.
+	got := decodeProjectDir("-Users-rian-focaApp-daas")
+	want := "/Users/rian/focaApp/daas"
 	if got != want {
 		t.Fatalf("decodeProjectDir = %q, want %q", got, want)
 	}

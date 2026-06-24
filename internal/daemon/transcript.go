@@ -8,17 +8,11 @@ import (
 )
 
 // decodeProjectDir reverses Claude Code's project-dir encoding (cwd path with
-// '/' replaced by '-' and literal '-' escaped as '--'). This is lossy,
-// so it is only a cheap hint; the authoritative cwd is read from the transcript
-// body via parseTranscriptTail.
+// '/' replaced by '-'). The encoding is lossy — a literal '-' in a path is
+// indistinguishable from a separator — so this is only a best-effort hint. The
+// authoritative cwd is read from the transcript body via parseTranscriptTail.
 func decodeProjectDir(name string) string {
-	// Decode: "--" is an escaped dash (literal "-"), single "-" is a path separator "/".
-	// Strategy: "--" → placeholder, then "-" → "/", then placeholder → "-".
-	const placeholder = "\x00"
-	s := strings.ReplaceAll(name, "--", placeholder)
-	s = strings.ReplaceAll(s, "-", "/")
-	s = strings.ReplaceAll(s, placeholder, "-")
-	return s
+	return strings.ReplaceAll(name, "-", "/")
 }
 
 // transcriptEntry is the subset of a transcript JSONL line we read.
