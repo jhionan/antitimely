@@ -105,3 +105,29 @@ func TestRunTick_TranscriptResumesPausedProject(t *testing.T) {
 		t.Fatalf("project still paused; transcript should auto-resume")
 	}
 }
+
+func TestRunTick_TranscriptDedupTwoSessions(t *testing.T) {
+	root := t.TempDir()
+	now := int64(1782268300) // ~71s after the entry below (grace 600 ⇒ active)
+	// Two distinct session files in the same project dir, same cwd ⇒ both map
+	// to project Daas ⇒ two transcript signals ⇒ dedup must yield ONE tick.
+	writeSession(t, root, "-work-daas", "s1",
+		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n")
+	writeSession(t, root, "-work-daas", "s2",
+		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n")
+	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
+		IdleThresholdSec: 120, CPUDeltaThresh: 5, CPUDeltaThreshIdle: 5,
+		TranscriptTracking: true, TranscriptRoot: root, TranscriptGraceSec: 600,
+	})
+	defer db.Close()
+	pid := seedProjectWithCwdRule(t, db, cache, "Daas", "/work/daas")
+	br.IdleSecondsVal = 9999
+	br.Processes = nil
+
+	if err := p.RunTick(context.Background(), now); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+	if got := countTicks(t, db, pid); got != 1 {
+		t.Fatalf("ticks = %d, want 1 (two transcript sessions for same project dedup to one)", got)
+	}
+}
