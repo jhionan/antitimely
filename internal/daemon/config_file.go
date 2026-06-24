@@ -115,14 +115,21 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 		cfg.TranscriptTracking = *fc.TranscriptTracking
 	}
 	if fc.TranscriptGrace != "" {
-		if d, err := time.ParseDuration(fc.TranscriptGrace); err == nil && d > 0 {
-			cfg.TranscriptGraceSec = int(d.Seconds())
+		d, err := time.ParseDuration(fc.TranscriptGrace)
+		if err != nil {
+			return fmt.Errorf("transcript_grace: %w", err)
 		}
+		if d <= 0 {
+			return fmt.Errorf("transcript_grace: must be positive, got %q", fc.TranscriptGrace)
+		}
+		cfg.TranscriptGraceSec = int(d.Seconds())
 	}
 	if fc.TranscriptRoot != "" {
-		if p, err := expandHome(fc.TranscriptRoot); err == nil {
-			cfg.TranscriptRoot = p
+		p, err := expandHome(fc.TranscriptRoot)
+		if err != nil {
+			return fmt.Errorf("transcript_root: %w", err)
 		}
+		cfg.TranscriptRoot = p
 	}
 	return nil
 }

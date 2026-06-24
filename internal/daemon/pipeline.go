@@ -181,6 +181,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	// tickedThisTick prevents a transcript signal from double-ticking a project
 	// already counted via focus or agent in this cycle. Transcript signals are
 	// appended last so focus/agent ticks register first.
+	// Row-count hygiene only; ultimate per-project dedup is COUNT(DISTINCT ts) in the totals queries.
 	tickedThisTick := map[int64]bool{}
 
 	for _, sig := range signals {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,15 +64,17 @@ func importTranscripts(db *sql.DB, q *store.Queries, snap *CacheSnapshot, root s
 					var exists int
 					db.QueryRowContext(ctx, `SELECT 1 FROM ticks WHERE ts=? AND project_id=?`, ts, *pid).Scan(&exists)
 					if exists == 1 {
+						// Row-count hygiene only; ultimate per-project dedup is COUNT(DISTINCT ts) in the totals queries.
 						continue
 					}
 					if err := q.InsertTick(ctx, store.InsertTickParams{
 						Ts:            ts,
 						ObservationID: obsID,
 						ProjectID:     sql.NullInt64{Int64: *pid, Valid: true},
-					}); err == nil {
-						inserted++
+					}); err != nil {
+						return inserted, fmt.Errorf("insert tick ts=%d project=%d: %w", ts, *pid, err)
 					}
+					inserted++
 				}
 			}
 		}

@@ -98,6 +98,25 @@ func defaultFileConfigForTest(t *testing.T, yaml string) Config {
 	return cfg
 }
 
+func TestParseConfig_TranscriptGraceBadValue(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("transcript_grace: notaduration\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fc, err := LoadFileConfig(p)
+	if err != nil {
+		t.Fatalf("LoadFileConfig: %v", err)
+	}
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig: %v", err)
+	}
+	if err := fc.ApplyTo(&cfg); err == nil {
+		t.Fatal("expected error for bad transcript_grace, got nil")
+	}
+}
+
 func TestParseConfig_TranscriptDefaultsAndOverrides(t *testing.T) {
 	// Defaults: tracking on, 600s grace, non-empty root.
 	def := defaultFileConfigForTest(t, "")
