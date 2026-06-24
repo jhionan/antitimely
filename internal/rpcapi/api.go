@@ -261,3 +261,8 @@ type SetCompanyBillingArgs struct {
 	BilledFrom  string
 }
 type SetCompanyBillingReply struct{}
+
+// --- Transcript import ---
+
+type TranscriptImportArgs struct{ FromUnix, ToUnix int64 }
+type TranscriptImportReply struct{ Inserted int }

@@ -124,6 +124,8 @@ func Run(cfg Config, schemaSQL string) error {
 		TickIntervalSeconds: cfg.IntervalSeconds,
 		Perm:                pt,
 		StartedAtUnix:       time.Now().Unix(),
+		TranscriptRoot:      cfg.TranscriptRoot,
+		TranscriptGraceSec:  cfg.TranscriptGraceSec,
 	}
 	if err := svc.ReloadCache(); err != nil {
 		return fmt.Errorf("initial cache load: %w", err)

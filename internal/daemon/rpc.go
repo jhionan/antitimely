@@ -25,6 +25,8 @@ type AntitimelyService struct {
 	TickIntervalSeconds int
 	Perm                *PermissionTracker
 	StartedAtUnix       int64 // set when the daemon boots; used to report uptime
+	TranscriptRoot      string
+	TranscriptGraceSec  int
 }
 
 // rpcHandlerDeadline bounds any single RPC handler. SQLite on a slow filesystem

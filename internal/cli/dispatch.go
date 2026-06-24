@@ -52,6 +52,8 @@ func Dispatch(args []string) int {
 		return cmdUninstallLaunchAgent(args[1:])
 	case "restart":
 		return cmdRestartDaemon(args[1:])
+	case "import-transcripts":
+		return importTranscriptsCmd(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printUsage(os.Stderr)
