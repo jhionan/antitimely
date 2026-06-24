@@ -25,7 +25,7 @@ CREATE TABLE observations_new (
 // 'transcript'. SQLite can't ALTER a CHECK in place, so we rebuild the table.
 // Idempotent: if the current definition already permits 'transcript', it's a
 // no-op. Preserves rows and ids (ticks.observation_id FK relies on id stability).
-func migrateObservationsSourceCheck(db *sql.DB) error {
+func migrateObservationsSourceCheck(db *sql.DB) (retErr error) {
 	var ddl string
 	err := db.QueryRow(
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name='observations'`,
@@ -45,7 +45,11 @@ func migrateObservationsSourceCheck(db *sql.DB) error {
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
 		return fmt.Errorf("fk off: %w", err)
 	}
-	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	defer func() {
+		if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil && retErr == nil {
+			retErr = fmt.Errorf("fk on: %w", err)
+		}
+	}()
 
 	tx, err := db.Begin()
 	if err != nil {
