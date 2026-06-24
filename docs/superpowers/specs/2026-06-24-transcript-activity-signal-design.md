@@ -86,11 +86,15 @@ A transcript turn is **unambiguous active work**, stronger than agent CPU. So:
 - **Bypass the arming gate.** Armed projects suppress *CPU* agent ticks (because
   background CPU is ambiguous). A transcript turn is not ambiguous → it counts
   immediately and **disarms** the project (same effect as a focus signal).
-- **Do NOT auto-resume paused projects.** End-day / pause stays authoritative:
-  the user explicitly said "stop counting." A transcript signal ticks an
-  *active* project; for a *paused* one it is upserted as an observation (so it
-  survives in review) but does not resurrect it. This is the key guard against
-  an autonomous overnight agent loop re-billing a paused project.
+- **Transcript activity DOES count on a paused project (and auto-resumes it).**
+  The paused / End-day guard exists to stop *ambiguous background CPU* (dev
+  servers, language servers, idle agents churning) from resurrecting a paused
+  project. A transcript turn is **not** background noise — it is unambiguous
+  active work — so it overrides the pause: the project auto-resumes and the tick
+  lands. (Contrast: background *agent CPU* on a paused project is still
+  suppressed, unchanged.) Consequence: End-day no longer stops counting if you
+  keep taking turns in a Claude Code session — to stop counting you stop the
+  session. See Risks for the residual overnight-autonomous-loop case.
 - **Dedup within a project per tick.** If focus or CPU already produced a tick
   for this project this cycle, do not also emit a transcript tick — prevents
   per-project double counting. (Cross-project concurrency is unchanged and still
@@ -126,14 +130,44 @@ Defaults: enabled, 10-minute grace. Grace is the one tunable that trades
 - Because transcript ticks carry `source='transcript'`, the audit queries can
   attribute "how much of today came from remote/agent sessions vs focus vs CPU".
 
-## Phase 2 (optional, separate PR): back-fill importer
+## Output granularity (partner-facing) — a load-bearing principle
+
+The transcript gives us **precise timing** but is full of fine-grained steps
+(every message: "start planning", "fix that", "pivot to other thing first").
+Partner-facing output (timesheets, invoices for BClouder et al.) must **not**
+expose that play-by-play. The contract is:
+
+> Use transcripts (and CPU/focus) only to establish **when** and **how long** a
+> project was worked. Describe that block at **feature level** — "10:01–14:00:
+> worked on <feature>" — never the step sequence inside it.
+
+Implications for this design:
+- **Ticks store time, not narrative.** The signal layer (live + importer) only
+  ever writes `(ts, project)` ticks. It never derives or stores step text.
+- **Session stitching → one block.** The grace window already collapses a run of
+  turns into a single continuous interval; that interval is the unit we report,
+  not the individual turns.
+- **Descriptions come from the coarse sources, summarized.** The feature label
+  for a block is drawn from specs/plans and the *set* of commits in that window
+  (the timesheet design's source-of-truth), collapsed to the feature, not the
+  commit-by-commit list. Where only a transcript exists (planning, no commits),
+  a block may carry just a one-line feature summary or be left for the human to
+  label — still never a step transcript.
+
+This keeps the two layers cleanly separated: **timing is measured precisely;
+description is deliberately coarse.**
+
+## Phase 2 (same effort): historical back-fill importer
 
 A one-shot `atl import-transcripts [--from D --to D]` that replays historical
 transcripts into ticks for any uncovered interval — automating exactly the manual
 recovery done on 2026-06-24. Same cwd→project mapping and grace-window
-session-stitching; skips intervals already ticked. Lets us recover past lost
-windows without hand-written SQL. Kept out of the core daemon change to keep that
-PR focused.
+session-stitching; skips intervals already ticked; writes the same
+`source='transcript'` observations so imported and live time are indistinguishable
+and auditable. In scope for this effort but sequenced after the live collector
+lands (it reuses the collector's cwd-decode + stitch logic). Per the granularity
+principle, the importer emits **only ticks** — feature descriptions are produced
+later by the timesheet layer, not the importer.
 
 ## Testing
 
@@ -161,9 +195,14 @@ PR focused.
 - **Walk-away over-count:** bounded by grace (≤10m after last turn). Acceptable;
   End-day pause stops it entirely.
 - **Autonomous overnight agent loops** (an agent that keeps taking turns
-  unattended) *would* be counted on an active project — that is real compute, but
-  may not be billable. Mitigation: End-day pause; optionally a future "max
-  unattended transcript run" cap. Out of scope for v1.
+  unattended) *will* be counted, even on a paused project, because transcript
+  activity now overrides pause (decision #2). That is the accepted trade for
+  never dropping real remote/planning work. Note End-day no longer stops it — the
+  user stops counting by stopping the session. A future opt-in "max unattended
+  transcript run" cap (e.g. stop counting a session with no *human* user-turn for
+  N minutes, distinguishing human turns from agent/tool turns in the `.jsonl`)
+  could re-add a guard without re-breaking remote work. Out of scope for v1;
+  flagged so it isn't lost.
 - **Concurrent sessions, same cwd:** each session file is tracked independently;
   per-project per-tick dedup prevents double counting.
 - **Transcript format drift:** depends on the `timestamp` + `cwd` fields in
