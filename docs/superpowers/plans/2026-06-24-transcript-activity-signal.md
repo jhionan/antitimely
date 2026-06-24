@@ -272,8 +272,10 @@ package daemon
 import "testing"
 
 func TestDecodeProjectDir(t *testing.T) {
-	got := decodeProjectDir("-Users-rian-focaApp-bclouder-daas-daas-back-end")
-	want := "/Users/rian/focaApp/bclouder/daas/daas-back-end"
+	// decode is intentionally lossy (Claude Code does not escape literal '-'),
+	// so test a dash-free path; the authoritative cwd comes from the jsonl body.
+	got := decodeProjectDir("-Users-rian-focaApp-daas")
+	want := "/Users/rian/focaApp/daas"
 	if got != want {
 		t.Fatalf("decodeProjectDir = %q, want %q", got, want)
 	}
@@ -292,9 +294,9 @@ not json — must be skipped
 	if cwd != "/Users/rian/daas" {
 		t.Fatalf("cwd = %q", cwd)
 	}
-	// 2026-06-24T02:30:29Z == 1782282629 unix.
-	if newest != 1782282629 {
-		t.Fatalf("newest = %d, want 1782282629", newest)
+	// 2026-06-24T02:30:29Z == 1782268229 unix.
+	if newest != 1782268229 {
+		t.Fatalf("newest = %d, want 1782268229", newest)
 	}
 }
 
@@ -481,7 +483,7 @@ func newTranscriptPipeline(t *testing.T, root string, graceSec int, prefixes []s
 
 func TestCollectTranscript_EmitsWithinGrace(t *testing.T) {
 	root := t.TempDir()
-	now := int64(1782282700)
+	now := int64(1782268300)
 	// last entry 71s before now; grace 600s ⇒ active.
 	body := `{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}` + "\n"
 	writeSession(t, root, "-work-daas", "sess1", body)
@@ -510,7 +512,7 @@ func TestCollectTranscript_StaleBeyondGrace(t *testing.T) {
 
 func TestCollectTranscript_CwdNotTracked(t *testing.T) {
 	root := t.TempDir()
-	now := int64(1782282700)
+	now := int64(1782268300)
 	body := `{"cwd":"/work/other","timestamp":"2026-06-24T02:30:29Z"}` + "\n"
 	writeSession(t, root, "-work-other", "sess1", body)
 	p, _ := newTranscriptPipeline(t, root, 600, []string{"/work/daas"})
@@ -709,7 +711,7 @@ func countTicks(t *testing.T, db *sql.DB, projectID int64) int {
 
 func TestRunTick_TranscriptCountsWhileIdleAndZeroCPU(t *testing.T) {
 	root := t.TempDir()
-	now := int64(1782282700)
+	now := int64(1782268300)
 	prefix := "/work/daas"
 	writeSession(t, root, "-work-daas", "s1",
 		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n") // ~71s before now
@@ -738,7 +740,7 @@ func TestRunTick_TranscriptCountsWhileIdleAndZeroCPU(t *testing.T) {
 
 func TestRunTick_TranscriptResumesPausedProject(t *testing.T) {
 	root := t.TempDir()
-	now := int64(1782282700)
+	now := int64(1782268300)
 	writeSession(t, root, "-work-daas", "s1",
 		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n")
 	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
@@ -908,7 +910,7 @@ Append to `pipeline_transcript_test.go`:
 ```go
 func TestRunTick_TranscriptDedupWithFocus(t *testing.T) {
 	root := t.TempDir()
-	now := int64(1782282700)
+	now := int64(1782268300)
 	writeSession(t, root, "-work-daas", "s1",
 		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n")
 	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
@@ -1202,8 +1204,8 @@ func TestImportTranscripts_StitchesAndSkipsExisting(t *testing.T) {
 	defer db.Close()
 	pid := seedProjectWithCwdRule(t, db, cache, "Daas", "/work/daas")
 
-	from := int64(1782280800) // 2026-06-24T02:00:00Z
-	to := int64(1782283200)   // 2026-06-24T03:00:00Z
+	from := int64(1782266400) // 2026-06-24T02:00:00Z
+	to := int64(1782270000)   // 2026-06-24T03:00:00Z
 	inserted, err := importTranscripts(db, store.New(db), cache.Snapshot(), root, from, to, 600, 5)
 	if err != nil {
 		t.Fatalf("import: %v", err)
