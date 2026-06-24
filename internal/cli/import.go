@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/rian/antitimely/internal/rpcapi"
 )
@@ -25,6 +26,9 @@ func importTranscriptsCmd(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "invalid --to:", err)
 		return 64
+	}
+	if toUnix == 0 {
+		toUnix = time.Now().Unix()
 	}
 
 	client, code := dialOrExit()

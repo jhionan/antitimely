@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 
 	"github.com/rian/antitimely/internal/store"
@@ -44,5 +43,4 @@ func TestImportTranscripts_StitchesAndSkipsExisting(t *testing.T) {
 	if again != 0 {
 		t.Fatalf("reimport inserted = %d, want 0", again)
 	}
-	_ = context.Background()
 }
