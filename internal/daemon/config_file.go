@@ -191,5 +191,12 @@ agent_busy_fall_ticks: 3
 # socket_path: ~/.antitimely/antitimely.sock
 # db_path:     ~/.antitimely/db.sqlite
 # pid_path:    ~/.antitimely/antitimely.pid
+
+# Count Claude Code work (incl. remote-driven and planning sessions) by watching
+# session transcripts. Captures work that produces no local CPU/focus. Transcript
+# activity overrides pause; counting continues until <grace> after the last turn.
+# transcript_tracking: true
+# transcript_grace: 10m          # a session counts this long after its last turn
+# transcript_root: ~/.claude/projects
 `
 }
