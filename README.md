@@ -68,6 +68,49 @@ atl report --from=2026-05-13 --to=2026-05-21
 atl invoice send --at=2026-05-20 --note="May invoice" BClouder
 ```
 
+## How it works
+
+A background daemon polls every 5 seconds, stores everything in a single SQLite file (`~/.antitimely/db.sqlite`), and answers the CLI over a Unix socket. All OS introspection is isolated in one package (`internal/macos`) and done by shelling out to standard macOS tools — no CGO.
+
+### Each poll: three independent signals
+
+On every tick the daemon gathers up to three kinds of **observation**, each a fingerprint of "something is happening":
+
+| Signal | How the process / work is identified | Carries |
+|---|---|---|
+| **focus** | The frontmost app, via AppleScript against *System Events* (`osascript`) — its bundle id, name, and focused window title. Collected only while you're at the keyboard. | bundle id + window title (no cwd) |
+| **agent** | `ps -A` lists every process with its cumulative CPU time. The daemon diffs each PID's CPU against the previous poll; processes burning sustained CPU (the "busy bar", with rise/fall hysteresis — see [What counts as "active"](#what-counts-as-active)) qualify. For each, the working directory is read with `lsof -p <pid> -d cwd`. | binary name + cwd |
+| **transcript** | Tails Claude Code session files under `~/.claude/projects/<dir>/*.jsonl`, reading the `cwd` and last-activity timestamp straight from the transcript. Needs no CPU, no focus, not even a local process. | cwd + session id |
+
+The agent signal is what captures **parallel work**: `ps` sees three `claude` processes in three directories at once, and each becomes its own observation.
+
+### Which processes count
+
+Two allowlists keep the daemon from tracking your whole system:
+
+- `atl watch add app <bundle-id>` gates the **focus** signal — only allowlisted foreground apps produce an observation.
+- `atl watch add binary <name>` marks a binary as a tracked **agent**.
+
+An agent process is tracked if **either** its binary is allowlisted **or** its working directory already falls under a known project prefix — so a build or test process running *inside* a tracked repo counts too, even if you never named it. (To avoid running `lsof` on every process on the machine, the cwd is looked up only for processes that cross the busy bar.)
+
+### Turning an observation into a project
+
+Each unique `(source, bundle id, window title, binary name, cwd)` tuple is stored once as an observation; thousands of ticks then reference that single row. To attribute it, the daemon runs your **rules** in order (priority, then age) and takes the first whose every set field matches:
+
+- **cwd prefix** — the process's working directory equals, or is a subdirectory of, the rule's path (matched literally — casing must match the real folder)
+- **bundle id** / **binary name** — exact match
+- **window title** — substring match
+
+`atl review` builds these rules for you: it surfaces observations that ticked but matched no rule (their raw fingerprints, called *signatures*) and proposes a cwd prefix. Tagging a signature writes the rule **and** retroactively re-credits every past tick that matches — in one transaction.
+
+### Idle, pausing, and what finally gets stored
+
+- **Idle gate.** The daemon reads keyboard/mouse idle time from the HID system (`ioreg`). Past `idle_threshold` (default 2m) the *focus* signal is dropped and the *agent* busy bar gets ~6× stricter — but the *transcript* signal still fires, which is how remote/agent work with no local input is still captured.
+- **Pause.** A paused project ignores agent and focus ticks, but an active transcript on it auto-resumes counting — real work overrides a forgotten "end day".
+- **Ticks.** Time lands on a 5-second grid: one row per `(timestamp, observation)`, so duplicate signals in the same second collapse. A project's hours are `COUNT(DISTINCT timestamp) × 5s`; within a company, a second worked on two projects at once bills once.
+
+See [Layered architecture](#layered-architecture) for the code map and [For AI coding agents](#for-ai-coding-agents) for the agent-specific details.
+
 ## For AI coding agents
 
 This app was designed with AI-agentic workflows as a first-class use case. **You don't need to integrate anything into your agent** — tracking is fully passive.
@@ -94,7 +137,7 @@ cd ~/work/antitimely && opencode
 
 ### Project rules
 
-A project rule says *"if an allowlisted agent's working directory begins with this path, the work belongs to this project."* The match is case-insensitive (so `Antitimely` the project matches `~/work/antitimely` the folder).
+A project rule says *"if an allowlisted agent's working directory begins with this path, the work belongs to this project."* The stored prefix is matched **literally** against each process's real working directory; when `atl review` *proposes* a prefix it finds the project name in the path case-insensitively (so project `Antitimely` yields the prefix `~/work/antitimely`, which then matches exactly).
 
 You can create rules:
 - **Interactively** via `atl review` — recommended; it proposes the right cwd prefix based on what it actually saw
