@@ -18,6 +18,16 @@ func IsStdinTerminal() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+// IsStdoutTerminal reports whether stdout appears to be an interactive terminal.
+// Returns false if stdout is a pipe, file, or other non-tty.
+func IsStdoutTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 // RunMenu launches the top-level interactive menu and loops until the user quits.
 func RunMenu() int {
 	stdin := bufio.NewScanner(os.Stdin)
