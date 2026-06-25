@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rian/antitimely/internal/rpcapi"
@@ -30,7 +31,19 @@ func cmdStatus(args []string) int {
 	if !*once && IsStdoutTerminal() {
 		return runStatusLive(client)
 	}
+	return renderOnce(client)
+}
 
+// fetchStatus performs the single Status RPC.
+func fetchStatus(client *rpc.Client) (rpcapi.StatusReply, error) {
+	var reply rpcapi.StatusReply
+	err := client.Call(rpcapi.ServiceName+".Status", rpcapi.StatusArgs{}, &reply)
+	return reply, err
+}
+
+// renderOnce fetches and prints a single status snapshot: body to stdout,
+// accessibility warning to stderr. Returns the process exit code.
+func renderOnce(client *rpc.Client) int {
 	reply, err := fetchStatus(client)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -39,13 +52,6 @@ func cmdStatus(args []string) int {
 	renderStatus(os.Stdout, reply)
 	renderWarning(os.Stderr, reply)
 	return 0
-}
-
-// fetchStatus performs the single Status RPC.
-func fetchStatus(client *rpc.Client) (rpcapi.StatusReply, error) {
-	var reply rpcapi.StatusReply
-	err := client.Call(rpcapi.ServiceName+".Status", rpcapi.StatusArgs{}, &reply)
-	return reply, err
 }
 
 // renderStatus writes one status frame (header, today total, grouped billables,
@@ -151,41 +157,49 @@ func fmtDuration(seconds int64) string {
 }
 
 // runStatusLive renders the status frame on the alternate screen, refreshing
-// every 5s, until the user presses Esc (returns) or Ctrl-C (clean exit). The
-// terminal is always restored, including on SIGINT.
+// every 5s, until the user presses Esc (returns) or a terminal/job-control
+// signal arrives. The terminal is always restored: Esc returns to the caller;
+// SIGINT/SIGQUIT/SIGTERM/SIGTSTP all clean-exit with terminal restored (so
+// Ctrl-Z exits the view rather than suspending with alt-screen active).
 func runStatusLive(client *rpc.Client) int {
 	st, err := enterCbreak()
 	if err != nil {
 		// Not a real tty after all — fall back to a single snapshot.
-		reply, ferr := fetchStatus(client)
-		if ferr != nil {
-			fmt.Fprintln(os.Stderr, ferr)
-			return 1
-		}
-		renderStatus(os.Stdout, reply)
-		renderWarning(os.Stderr, reply)
-		return 0
+		return renderOnce(client)
 	}
 
 	out := os.Stdout
 	var restoreOnce sync.Once
+	done := make(chan struct{})
 	cleanup := func() {
 		restoreOnce.Do(func() {
 			altScreenLeave(out)
 			showCursor(out)
 			st.restore()
+			close(done)
 		})
 	}
 	defer cleanup()
 
-	// Guarantee restore on Ctrl-C (ISIG is kept, so Ctrl-C raises SIGINT).
+	// Always restore the terminal on any terminal/job-control signal. Cbreak
+	// keeps ISIG, so Ctrl-C (SIGINT), Ctrl-\ (SIGQUIT) and Ctrl-Z (SIGTSTP)
+	// still fire; catching them here prevents leaving the terminal in raw +
+	// alt-screen mode. The goroutine also exits on normal teardown (done) so
+	// it does not leak across repeated menu visits.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGTSTP)
 	defer signal.Stop(sigCh)
 	go func() {
-		<-sigCh
-		cleanup()
-		os.Exit(130)
+		select {
+		case sig := <-sigCh:
+			cleanup()
+			code := 130
+			if s, ok := sig.(syscall.Signal); ok {
+				code = 128 + int(s)
+			}
+			os.Exit(code)
+		case <-done:
+		}
 	}()
 
 	altScreenEnter(out)
