@@ -60,7 +60,7 @@ atl watch add binary claude            # any CLI agent: claude, opencode, aider,
 atl watch add app com.google.antigravity-ide   # any GUI app's bundle id
 
 # After working a bit, see what's tracked
-atl status                             # grouped by company → project
+atl status                             # live view, grouped by company → project (Esc/Ctrl-C to exit; --once for a single print)
 atl review                             # tag any unassigned signatures
 atl report --from=2026-05-13 --to=2026-05-21
 
@@ -197,7 +197,7 @@ Precedence: defaults → config file → CLI flags on `atl daemon`.
 | Command | What it does |
 |---|---|
 | `atl` | interactive menu (TTY-aware; piped invocations fall back to usage) |
-| `atl status` | current grouped totals + daemon uptime, idle, permission state |
+| `atl status [--once]` | live self-refreshing view (every 5s) of grouped totals + daemon uptime, idle, permission state; Esc/Ctrl-C exits. In a terminal it refreshes in place; `--once` (or piped output) prints a single snapshot and exits |
 | `atl review` | walk through unassigned observations, tag them, build rules |
 | `atl report [--from --to]` | date-range totals |
 | `atl summary [--from --to] [--project --company] [--all-authors] [--txt]` | markdown report: hours + git commits per project |
