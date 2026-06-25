@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rian/antitimely/internal/rpcapi"
 )
@@ -76,5 +77,16 @@ func TestRenderWarningOnlyWhenDenied(t *testing.T) {
 	}
 	if ok.String() != "" {
 		t.Errorf("expected no warning when ok, got: %q", ok.String())
+	}
+}
+
+func TestRenderFooter(t *testing.T) {
+	var buf bytes.Buffer
+	renderFooter(&buf, time.Date(2026, 6, 25, 20, 36, 1, 0, time.Local))
+	out := buf.String()
+	for _, want := range []string{"live", "every 5s", "Esc to exit", "20:36:01"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("footer missing %q, got: %q", want, out)
+		}
 	}
 }

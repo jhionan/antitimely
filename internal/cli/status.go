@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/rpc"
 	"os"
+	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/rian/antitimely/internal/rpcapi"
@@ -148,15 +150,66 @@ func fmtDuration(seconds int64) string {
 	return time.Duration(seconds * int64(time.Second)).String()
 }
 
-// runStatusLive is implemented in Task 3. Temporary stub to keep the package
-// compiling after Task 1; replaced in Task 3.
+// runStatusLive renders the status frame on the alternate screen, refreshing
+// every 5s, until the user presses Esc (returns) or Ctrl-C (clean exit). The
+// terminal is always restored, including on SIGINT.
 func runStatusLive(client *rpc.Client) int {
-	reply, err := fetchStatus(client)
+	st, err := enterCbreak()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		// Not a real tty after all — fall back to a single snapshot.
+		reply, ferr := fetchStatus(client)
+		if ferr != nil {
+			fmt.Fprintln(os.Stderr, ferr)
+			return 1
+		}
+		renderStatus(os.Stdout, reply)
+		renderWarning(os.Stderr, reply)
+		return 0
 	}
-	renderStatus(os.Stdout, reply)
-	renderWarning(os.Stderr, reply)
-	return 0
+
+	out := os.Stdout
+	var restoreOnce sync.Once
+	cleanup := func() {
+		restoreOnce.Do(func() {
+			altScreenLeave(out)
+			showCursor(out)
+			st.restore()
+		})
+	}
+	defer cleanup()
+
+	// Guarantee restore on Ctrl-C (ISIG is kept, so Ctrl-C raises SIGINT).
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		cleanup()
+		os.Exit(130)
+	}()
+
+	altScreenEnter(out)
+	hideCursor(out)
+
+	for {
+		reply, err := fetchStatus(client)
+		if err != nil {
+			cleanup()
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		clearScreen(out)
+		renderStatus(out, reply)
+		renderWarning(out, reply)
+		renderFooter(out, time.Now())
+
+		if st.readEvent() == evtEsc {
+			return 0 // cleanup runs via defer
+		}
+	}
+}
+
+// renderFooter writes the live-mode footer line.
+func renderFooter(w io.Writer, now time.Time) {
+	fmt.Fprintf(w, "\nlive · every 5s · Esc to exit · %s\n", now.Format("15:04:05"))
 }
