@@ -59,6 +59,36 @@ func asInt64(v interface{}) int64 {
 	}
 }
 
+// LatestTick is a cheap probe for the live status view. It returns the newest
+// tick timestamp plus the cheap-to-compute live fields (idle, uptime,
+// permission), so the view refreshes its header every cycle but only calls the
+// expensive Status when LatestTickUnix advances (a new tick was recorded).
+func (s *AntitimelyService) LatestTick(args rpcapi.LatestTickArgs, reply *rpcapi.LatestTickReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+
+	ts, err := s.Q.MaxTickTs(ctx)
+	if err != nil {
+		return err
+	}
+	reply.LatestTickUnix = ts
+
+	if idle, err := s.Bridge.IdleSeconds(ctx); err != nil {
+		log.Printf("latesttick idle: %v", err)
+	} else {
+		reply.UserIdleSeconds = idle
+	}
+	if s.StartedAtUnix > 0 {
+		reply.DaemonUptimeSeconds = time.Now().Unix() - s.StartedAtUnix
+	}
+	if s.Perm != nil {
+		reply.PermissionState = s.Perm.Get()
+	} else {
+		reply.PermissionState = "ok"
+	}
+	return nil
+}
+
 // Status returns a live snapshot of daemon state.
 func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusReply) error {
 	ctx, cancel := handlerCtx()

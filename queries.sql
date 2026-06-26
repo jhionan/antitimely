@@ -236,3 +236,8 @@ INSERT INTO invoices (
     number, pdf_path, total_cents, currency, sender_key
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
+
+-- name: MaxTickTs :one
+-- Cheap "has anything changed?" probe for the live status view: the newest
+-- tick timestamp (0 when there are no ticks). Indexed, ~instant.
+SELECT CAST(COALESCE(MAX(ts), 0) AS INTEGER) AS max_ts FROM ticks;

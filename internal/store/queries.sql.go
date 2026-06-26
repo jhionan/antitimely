@@ -843,6 +843,19 @@ func (q *Queries) ListWatchedPrograms(ctx context.Context) ([]ListWatchedProgram
 	return items, nil
 }
 
+const maxTickTs = `-- name: MaxTickTs :one
+SELECT CAST(COALESCE(MAX(ts), 0) AS INTEGER) AS max_ts FROM ticks
+`
+
+// Cheap "has anything changed?" probe for the live status view: the newest
+// tick timestamp (0 when there are no ticks). Indexed, ~instant.
+func (q *Queries) MaxTickTs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, maxTickTs)
+	var max_ts int64
+	err := row.Scan(&max_ts)
+	return max_ts, err
+}
+
 const pauseAllProjects = `-- name: PauseAllProjects :execrows
 UPDATE projects SET paused = 1
 `

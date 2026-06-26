@@ -205,12 +205,33 @@ func runStatusLive(client *rpc.Client) int {
 	altScreenEnter(out)
 	hideCursor(out)
 
+	// reply holds the last expensive Status snapshot; it is recomputed only when
+	// the cheap LatestTick probe shows a new tick (or the day rolls / probe
+	// fails). The header's cheap live fields (idle, uptime, permission) are
+	// refreshed from the probe every cycle so the view still feels live.
+	var reply rpcapi.StatusReply
+	lastTs := int64(-1)
+	lastDay := 0
 	for {
-		reply, err := fetchStatus(client)
-		if err != nil {
-			cleanup()
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+		probe, perr := fetchLatestTick(client)
+		curDay := localDayKey(time.Now())
+		if statusBodyChanged(lastTs, probe.LatestTickUnix, lastDay, curDay, perr != nil) {
+			full, ferr := fetchStatus(client)
+			if ferr != nil {
+				cleanup()
+				fmt.Fprintln(os.Stderr, ferr)
+				return 1
+			}
+			reply = full
+			lastDay = curDay
+			if perr == nil {
+				lastTs = probe.LatestTickUnix
+			}
+		}
+		if perr == nil {
+			reply.UserIdleSeconds = probe.UserIdleSeconds
+			reply.DaemonUptimeSeconds = probe.DaemonUptimeSeconds
+			reply.PermissionState = probe.PermissionState
 		}
 		clearScreen(out)
 		renderStatus(out, reply)
@@ -221,6 +242,28 @@ func runStatusLive(client *rpc.Client) int {
 			return 0 // cleanup runs via defer
 		}
 	}
+}
+
+// fetchLatestTick performs the cheap LatestTick probe RPC.
+func fetchLatestTick(client *rpc.Client) (rpcapi.LatestTickReply, error) {
+	var reply rpcapi.LatestTickReply
+	err := client.Call(rpcapi.ServiceName+".LatestTick", rpcapi.LatestTickArgs{}, &reply)
+	return reply, err
+}
+
+// statusBodyChanged reports whether the expensive Status body must be
+// recomputed: on the first cycle (lastTs < 0), when a new tick was recorded
+// (curTs != lastTs), when the local day rolled over (the "Today" totals reset),
+// or when the cheap probe failed (probeErr — fall back to a full fetch).
+func statusBodyChanged(lastTs, curTs int64, lastDay, curDay int, probeErr bool) bool {
+	return lastTs < 0 || probeErr || curTs != lastTs || curDay != lastDay
+}
+
+// localDayKey is a per-local-calendar-day integer (YYYYMMDD) used to detect
+// midnight rollover so the "Today" totals reset even with no new ticks.
+func localDayKey(now time.Time) int {
+	y, m, d := now.Date()
+	return y*10000 + int(m)*100 + d
 }
 
 // renderFooter writes the live-mode footer line.

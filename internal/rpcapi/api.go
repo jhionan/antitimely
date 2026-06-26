@@ -45,6 +45,21 @@ type ProjectTotals struct {
 	SuppressedSeconds int64
 }
 
+// --- LatestTick: cheap probe for the live status view ---
+
+type LatestTickArgs struct{}
+
+// LatestTickReply carries only the cheap-to-compute live fields. The live
+// status view polls this every refresh (~instant: one indexed MAX(ts) plus
+// cached idle), and recomputes the expensive grouped totals via Status only
+// when LatestTickUnix advances (a new tick was recorded) or the day rolls over.
+type LatestTickReply struct {
+	LatestTickUnix      int64  // newest tick ts, 0 if no ticks yet
+	UserIdleSeconds     int    // same source as StatusReply.UserIdleSeconds
+	DaemonUptimeSeconds int64  // same source as StatusReply.DaemonUptimeSeconds
+	PermissionState     string // same source as StatusReply.PermissionState
+}
+
 // --- Invoices ---
 
 type InvoiceSendArgs struct {

@@ -90,3 +90,39 @@ func TestRenderFooter(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusBodyChanged(t *testing.T) {
+	cases := []struct {
+		name            string
+		lastTs, curTs   int64
+		lastDay, curDay int
+		probeErr        bool
+		want            bool
+	}{
+		{"first cycle (lastTs<0)", -1, 1782484260, 0, 20260626, false, true},
+		{"unchanged: same ts, same day", 100, 100, 20260626, 20260626, false, false},
+		{"new tick recorded", 100, 105, 20260626, 20260626, false, true},
+		{"day rollover with same ts", 100, 100, 20260625, 20260626, false, true},
+		{"probe error forces a full fetch", 100, 100, 20260626, 20260626, true, true},
+	}
+	for _, c := range cases {
+		if got := statusBodyChanged(c.lastTs, c.curTs, c.lastDay, c.curDay, c.probeErr); got != c.want {
+			t.Errorf("%s: statusBodyChanged = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestLocalDayKey(t *testing.T) {
+	end := localDayKey(time.Date(2026, 6, 26, 23, 59, 59, 0, time.Local))
+	start := localDayKey(time.Date(2026, 6, 26, 0, 0, 0, 0, time.Local))
+	next := localDayKey(time.Date(2026, 6, 27, 0, 0, 0, 0, time.Local))
+	if end != 20260626 {
+		t.Errorf("localDayKey = %d, want 20260626", end)
+	}
+	if start != end {
+		t.Errorf("same calendar day must yield same key: %d vs %d", start, end)
+	}
+	if next == end {
+		t.Error("next day must differ")
+	}
+}

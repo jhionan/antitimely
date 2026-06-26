@@ -858,3 +858,37 @@ func TestRPC_TagSignature_CreateProject_Arms(t *testing.T) {
 		t.Errorf("expected create-on-the-fly project %d armed, got %v", newID, cache.Snapshot().ArmedProjects)
 	}
 }
+
+func TestRPC_LatestTick(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	// No ticks yet → 0; Perm is nil in the test service → "ok".
+	var empty rpcapi.LatestTickReply
+	if err := client.Call(rpcapi.ServiceName+".LatestTick", rpcapi.LatestTickArgs{}, &empty); err != nil {
+		t.Fatalf("LatestTick (empty): %v", err)
+	}
+	if empty.LatestTickUnix != 0 {
+		t.Errorf("LatestTickUnix with no ticks = %d, want 0", empty.LatestTickUnix)
+	}
+	if empty.PermissionState != "ok" {
+		t.Errorf("PermissionState = %q, want \"ok\"", empty.PermissionState)
+	}
+
+	obsID, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/x", FirstSeen: 1000,
+	})
+	// Insert out of order; the probe must report the MAX, not the last.
+	for _, ts := range []int64{2000, 2010, 2005} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsID})
+	}
+
+	var reply rpcapi.LatestTickReply
+	if err := client.Call(rpcapi.ServiceName+".LatestTick", rpcapi.LatestTickArgs{}, &reply); err != nil {
+		t.Fatalf("LatestTick: %v", err)
+	}
+	if reply.LatestTickUnix != 2010 {
+		t.Errorf("LatestTickUnix = %d, want 2010 (max of inserted ts)", reply.LatestTickUnix)
+	}
+}
