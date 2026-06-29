@@ -177,6 +177,15 @@ func Run(cfg Config, schemaSQL string) error {
 		poller.Run(ctx)
 	}()
 
+	// Periodically truncate the WAL. Passive auto-checkpoint alone let it grow
+	// unbounded (see checkpointWAL); a 5-minute TRUNCATE pass keeps it bounded
+	// and runs a final checkpoint on shutdown.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runCheckpointer(ctx, db, 5*time.Minute)
+	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
