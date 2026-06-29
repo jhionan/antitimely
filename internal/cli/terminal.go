@@ -14,6 +14,12 @@ const (
 	ansiClearHome  = "\x1b[H\x1b[J"
 	ansiHideCursor = "\x1b[?25l"
 	ansiShowCursor = "\x1b[?25h"
+	// Disable terminal modes that emit escape sequences on their own. Focus
+	// reporting (?1004) sends ESC[I / ESC[O when the window gains/loses focus;
+	// bracketed paste (?2004) wraps pastes in ESC[200~ / ESC[201~. Either, if
+	// left on, feeds stray ESC bytes into the live view and was closing it.
+	ansiFocusOff = "\x1b[?1004l"
+	ansiPasteOff = "\x1b[?2004l"
 )
 
 func altScreenEnter(w io.Writer) { fmt.Fprint(w, ansiAltEnter) }
@@ -21,6 +27,10 @@ func altScreenLeave(w io.Writer) { fmt.Fprint(w, ansiAltLeave) }
 func clearScreen(w io.Writer)    { fmt.Fprint(w, ansiClearHome) }
 func hideCursor(w io.Writer)     { fmt.Fprint(w, ansiHideCursor) }
 func showCursor(w io.Writer)     { fmt.Fprint(w, ansiShowCursor) }
+
+// quietTerminalInput disables focus reporting and bracketed paste so the
+// terminal stops emitting escape sequences while the live view is open.
+func quietTerminalInput(w io.Writer) { fmt.Fprint(w, ansiFocusOff+ansiPasteOff) }
 
 type statusEvent int
 
@@ -70,11 +80,13 @@ func (s *termState) setVTime(d uint8) {
 
 // readEvent does one timed read. With VMIN=0/VTIME=50 it returns after a
 // keypress or after 5s. A lone 0x1b is disambiguated from an escape sequence
-// (arrow keys etc.) with a 0.1s follow-up read.
+// (arrow keys, focus events, etc.) with a short follow-up read: only a truly
+// isolated ESC counts as the Esc key. Any sequence is fully drained so its
+// tail cannot leak into the next read and be misread as another ESC.
 func (s *termState) readEvent() statusEvent {
-	var b [16]byte
+	var b [32]byte
 	n, _ := unix.Read(s.fd, b[:])
-	if n == 0 {
+	if n <= 0 {
 		return evtTimeout
 	}
 	if b[0] != 0x1b {
@@ -84,13 +96,25 @@ func (s *termState) readEvent() statusEvent {
 		return evtOther // Esc followed by more bytes in one read = sequence
 	}
 	// Lone Esc byte: a real sequence's tail is already in the OS buffer, so a
-	// 0.1s read returns it immediately; a bare Esc times out empty.
-	s.setVTime(1)
+	// 0.2s read returns it; a bare Esc keypress times out empty. The window is
+	// wider than the original 0.1s to tolerate sequences fragmented by latency
+	// (tmux/ssh) — those were closing the view on their own.
+	s.setVTime(2)
 	n2, _ := unix.Read(s.fd, b[:])
-	s.setVTime(50)
 	if n2 == 0 {
+		s.setVTime(50)
 		return evtEsc
 	}
+	// It is an escape sequence, not the Esc key. Drain any remaining tail bytes
+	// (CSI/SS3 parameters + final byte) before returning so nothing lingers.
+	for {
+		s.setVTime(1)
+		m, _ := unix.Read(s.fd, b[:])
+		if m <= 0 {
+			break
+		}
+	}
+	s.setVTime(50)
 	return evtOther
 }
 

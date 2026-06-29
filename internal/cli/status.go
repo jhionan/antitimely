@@ -204,12 +204,15 @@ func runStatusLive(client *rpc.Client) int {
 
 	altScreenEnter(out)
 	hideCursor(out)
+	quietTerminalInput(out) // stop focus/paste escape sequences from closing the view
 
 	// reply holds the last expensive Status snapshot; it is recomputed only when
 	// the cheap LatestTick probe shows a new tick (or the day rolls / probe
 	// fails). The header's cheap live fields (idle, uptime, permission) are
 	// refreshed from the probe every cycle so the view still feels live.
 	var reply rpcapi.StatusReply
+	haveData := false
+	var lastErr error
 	lastTs := int64(-1)
 	lastDay := 0
 	for {
@@ -218,14 +221,18 @@ func runStatusLive(client *rpc.Client) int {
 		if statusBodyChanged(lastTs, probe.LatestTickUnix, lastDay, curDay, perr != nil) {
 			full, ferr := fetchStatus(client)
 			if ferr != nil {
-				cleanup()
-				fmt.Fprintln(os.Stderr, ferr)
-				return 1
-			}
-			reply = full
-			lastDay = curDay
-			if perr == nil {
-				lastTs = probe.LatestTickUnix
+				// Transient RPC error (e.g. the daemon is slow and the query
+				// timed out). Keep the view alive showing the last good frame
+				// plus a notice, and retry next cycle — only Esc/Ctrl-C exit.
+				lastErr = ferr
+			} else {
+				reply = full
+				haveData = true
+				lastErr = nil
+				lastDay = curDay
+				if perr == nil {
+					lastTs = probe.LatestTickUnix
+				}
 			}
 		}
 		if perr == nil {
@@ -234,8 +241,15 @@ func runStatusLive(client *rpc.Client) int {
 			reply.PermissionState = probe.PermissionState
 		}
 		clearScreen(out)
-		renderStatus(out, reply)
-		renderWarning(out, reply)
+		if haveData {
+			renderStatus(out, reply)
+			renderWarning(out, reply)
+		} else {
+			fmt.Fprintln(out, "Connecting to daemon…")
+		}
+		if lastErr != nil {
+			fmt.Fprintf(out, "\n⚠ daemon not responding, retrying: %v\n", lastErr)
+		}
 		renderFooter(out, time.Now())
 
 		if st.readEvent() == evtEsc {
