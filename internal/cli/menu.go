@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/rian/antitimely/internal/rpcapi"
 )
 
 // IsStdinTerminal reports whether stdin appears to be an interactive terminal.
@@ -259,8 +261,9 @@ func invoiceMenu(stdin *bufio.Scanner) {
 		fmt.Println()
 		fmt.Println("Invoices:")
 		fmt.Println("  [1] List all invoices")
-		fmt.Println("  [2] Send invoice (record billing anchor)")
+		fmt.Println("  [2] Generate invoice (PDF)")
 		fmt.Println("  [3] Delete invoice")
+		fmt.Println("  [4] Record anchor only (advanced)")
 		fmt.Println("  [b] Back")
 		choice, ok := promptLine(stdin, "Choice: ")
 		if !ok {
@@ -270,8 +273,16 @@ func invoiceMenu(stdin *bufio.Scanner) {
 		case "1":
 			invoiceList(nil)
 		case "2":
-			company, ok := promptLine(stdin, "Company name: ")
-			if !ok || company == "" {
+			invoiceGenerateFlow(stdin)
+		case "3":
+			idStr, ok := promptLine(stdin, "Invoice ID to delete: ")
+			if !ok || idStr == "" {
+				continue
+			}
+			invoiceDelete([]string{idStr})
+		case "4":
+			company, ok := pickCompany(stdin)
+			if !ok {
 				continue
 			}
 			at, _ := promptLine(stdin, "Date (YYYY-MM-DD, blank for now): ")
@@ -284,18 +295,42 @@ func invoiceMenu(stdin *bufio.Scanner) {
 				sendArgs = append([]string{"--note=" + note}, sendArgs...)
 			}
 			invoiceSend(sendArgs)
-		case "3":
-			idStr, ok := promptLine(stdin, "Invoice ID to delete: ")
-			if !ok || idStr == "" {
-				continue
-			}
-			invoiceDelete([]string{idStr})
 		case "b", "":
 			return
 		default:
 			fmt.Println("  invalid choice")
 		}
 	}
+}
+
+// invoiceGenerateFlow: pick a company, preview a dry-run, confirm, then
+// generate the real PDF and open + reveal it.
+func invoiceGenerateFlow(stdin *bufio.Scanner) {
+	company, ok := pickCompany(stdin)
+	if !ok {
+		return
+	}
+
+	preview, err := invoiceGenerateRPC(rpcapi.InvoiceGenerateArgs{CompanyName: company, DryRun: true})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	fmt.Printf("\nAbout to generate:\n  %s\n", formatInvoicePreview(preview))
+
+	confirm, ok := promptLine(stdin, "Generate this invoice? [y/N]: ")
+	if !ok || strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+		fmt.Println("  cancelled — nothing generated")
+		return
+	}
+
+	reply, err := invoiceGenerateRPC(rpcapi.InvoiceGenerateArgs{CompanyName: company})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	fmt.Printf("Generated %s — %s\n", reply.Number, reply.PDFPath)
+	openAndReveal(reply.PDFPath)
 }
 
 func rulesMenu(stdin *bufio.Scanner) {
