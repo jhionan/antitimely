@@ -36,7 +36,9 @@ func invoiceGenerateRPC(args rpcapi.InvoiceGenerateArgs) (rpcapi.InvoiceGenerate
 		if !isDaemonStall(err) {
 			return rpcapi.InvoiceGenerateReply{}, err
 		}
-		time.Sleep(2 * time.Second)
+		if attempt < 2 {
+			time.Sleep(2 * time.Second)
+		}
 	}
 	return rpcapi.InvoiceGenerateReply{}, fmt.Errorf("%w (daemon busy — check Accessibility, then retry)", lastErr)
 }

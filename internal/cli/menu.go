@@ -316,6 +316,11 @@ func invoiceGenerateFlow(stdin *bufio.Scanner) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
+	// The menu dry-run exists only to build the preview; it never opens the
+	// rendered PDF, so remove the daemon's throwaway temp file.
+	if preview.PDFPath != "" {
+		_ = os.Remove(preview.PDFPath)
+	}
 	fmt.Printf("\nAbout to generate:\n  %s\n", formatInvoicePreview(preview))
 
 	confirm, ok := promptLine(stdin, "Generate this invoice? [y/N]: ")
