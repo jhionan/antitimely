@@ -52,6 +52,8 @@ func Dispatch(args []string) int {
 		return cmdUninstallLaunchAgent(args[1:])
 	case "restart":
 		return cmdRestartDaemon(args[1:])
+	case "grant-accessibility":
+		return cmdGrantAccessibility(args[1:])
 	case "import-transcripts":
 		return importTranscriptsCmd(args[1:])
 	default:
@@ -84,6 +86,7 @@ Usage:
   antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
   antitimely uninstall-launch-agent   remove launch agent and stop background daemon
   antitimely restart                  restart the background daemon (launchctl kickstart -k)
+  antitimely grant-accessibility      open the macOS Accessibility pane to grant window-title capture
   antitimely debug   windows  |  frontmost  |  idle
   antitimely help    show this message
 
