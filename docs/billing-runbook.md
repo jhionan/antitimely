@@ -66,9 +66,11 @@ SELECT day, printf('%.2f', SUM(cnt)*5.0/3600) FROM (
 sqlite3 -readonly "$DB" "SELECT printf('%.2f h', SUM(cnt)*5.0/3600) FROM (SELECT COUNT(DISTINCT ts) cnt FROM ticks WHERE project_id IN (5,6,7) AND ts>=$START AND ts<$END GROUP BY project_id);"
 ```
 
-## Step 5 — Gather descriptions from git commits
+## Step 5 — Gather + verify descriptions from TWO sources (Claude-driven, not automatable yet)
 
-`atl summary` is the intended tool BUT is **currently broken** for this (see Known issues) — until fixed, gather commits manually. The BClouder repos:
+This step stays a **Claude task** — it needs judgment that the CLI can't do. Do NOT trust a single source; every day's description must be grounded in **both** of the following, cross-checked:
+
+**Source A — git commits** (what shipped). The BClouder repos:
 
 - `~/focaApp/bclouder/daas/daas-back-end` (.NET) and `~/focaApp/bclouder/daas/daas-front-end` (Angular) — Daas
 - `~/focaApp/bclouder/capex-sql/daas-back-end` — Daas worktree (capex branch)
@@ -76,11 +78,45 @@ sqlite3 -readonly "$DB" "SELECT printf('%.2f h', SUM(cnt)*5.0/3600) FROM (SELECT
 - `~/focaApp/bclouder/rumo/rumo-mobile` — Rumo
 
 ```bash
-git -C <repo> log --all --since=<START date> --until=<END date> --date=format:'%Y-%m-%d' --pretty='%cd | %s'
+# Use commit TIMES so edge days are attributed to the right invoice window:
+git -C <repo> log --all --no-merges --since=<START> --until=<END> --date=format:'%Y-%m-%d %H:%M' --pretty='%cd | %s'
 ```
-Include **all authors' worktree branches** (your commits use both `jhionan@gmail.com` and `37809501+jhionan@users.noreply.github.com`).
+Use `--all` (all worktree branches) and NO `--author` filter — commits span multiple identities (`jhionan@gmail.com` *and* `37809501+jhionan@users.noreply.github.com`) plus teammates.
 
-**Write the Work column in client-facing prose** (see ES-0002/ES-0003 for tone): product-prefixed (`DaaS —`, `Rumo —`, `VCNA —`), benefit/feature-oriented, **no internal jargon** (no migration numbers, class names, branch names, cwd paths). One line per day. Fold any manual entries (e.g. meetings logged via tick backfill) into that day's note.
+**Source B — Claude Code console/transcript history** (what you actually worked on — catches design, debugging, and low-commit days that commits alone miss). Extract the per-day prompts:
+
+```bash
+cd ~/.claude/projects
+python3 - <<'PY'
+import glob, json, collections, datetime
+by_day = collections.defaultdict(list)
+for f in glob.glob("./-Users-rian-focaApp-bclouder*/*.jsonl"):
+    for line in open(f, errors="ignore"):
+        if '"type":"user"' not in line: continue
+        try: o = json.loads(line)
+        except: continue
+        if o.get("type") != "user": continue
+        c = o.get("message", {}).get("content")
+        text = c if isinstance(c, str) else next((b.get("text") for b in c if isinstance(b, dict) and b.get("type")=="text"), None) if isinstance(c, list) else None
+        ts = o.get("timestamp")
+        if not text or not ts or text.strip().startswith(("<","Caveat:")): continue
+        try: day = datetime.datetime.fromisoformat(ts.replace("Z","+00:00")).astimezone().date()
+        except: continue
+        by_day[day].append(text.replace("\n"," ")[:130])
+for day in sorted(by_day):
+    if not (datetime.date(2026,6,16) <= day <= datetime.date(2026,7,1)): continue   # <-- set to the invoice window
+    print(f"\n==== {day} ({len(by_day[day])} prompts) ====")
+    seen=set()
+    for m in by_day[day]:
+        if m[:40].lower() in seen: continue
+        seen.add(m[:40].lower()); print("  •", m)
+        if len(seen) >= 7: break
+PY
+```
+
+**Reconcile each day against both sources, then write the Work column in client-facing prose** (see ES-0002/ES-0003 for tone): product-prefixed (`DaaS —`, `Rumo —`, `VCNA —`), benefit/feature-oriented, **no internal jargon** (no migration numbers, class names, branch names, cwd paths). One line per day. Fold manual entries (e.g. meetings logged via tick backfill) into that day's note.
+
+**Anti-fabrication rule (learned the hard way on ES-0004 / 06-16):** if a day has tracked hours but you find NO commits and NO transcript activity for it, do NOT invent a plausible description — say the work is uncaptured, or ask. A fabricated line nearly went to the client. Every line must trace to Source A or Source B.
 
 ## Step 6 — Write the two files (CSV + PDF) into the Invoices folder
 
