@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -188,13 +187,7 @@ func invoiceGenerate(args []string) int {
 		return 64
 	}
 
-	client, code := dialOrExit()
-	if client == nil {
-		return code
-	}
-	defer client.Close()
-	var reply rpcapi.InvoiceGenerateReply
-	if err := client.Call(rpcapi.ServiceName+".InvoiceGenerate", rpcapi.InvoiceGenerateArgs{
+	reply, err := invoiceGenerateRPC(rpcapi.InvoiceGenerateArgs{
 		CompanyName:   company,
 		FromUnix:      fromUnix,
 		ToUnix:        toUnix,
@@ -203,7 +196,8 @@ func invoiceGenerate(args []string) int {
 		DryRun:        *dryRun,
 		AllowEmpty:    *allowEmpty,
 		DiscountCents: discountCents,
-	}, &reply); err != nil {
+	})
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -212,9 +206,7 @@ func invoiceGenerate(args []string) int {
 		tag = " (dry-run)"
 	}
 	fmt.Printf("Generated %s%s — %s\n", reply.Number, tag, reply.PDFPath)
-	if err := exec.Command("open", reply.PDFPath).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "(warning: could not open viewer:", err, ")")
-	}
+	openAndReveal(reply.PDFPath)
 	return 0
 }
 
