@@ -161,6 +161,10 @@ func fmtDuration(seconds int64) string {
 // signal arrives. The terminal is always restored: Esc returns to the caller;
 // SIGINT/SIGQUIT/SIGTERM/SIGTSTP all clean-exit with terminal restored (so
 // Ctrl-Z exits the view rather than suspending with alt-screen active).
+//
+// The view is resilient to the daemon restarting underneath it: a dropped
+// connection is reconnected on the next cycle (see the redial loop), so it
+// recovers on its own instead of freezing.
 func runStatusLive(client *rpc.Client) int {
 	st, err := enterCbreak()
 	if err != nil {
@@ -216,30 +220,52 @@ func runStatusLive(client *rpc.Client) int {
 	lastTs := int64(-1)
 	lastDay := 0
 	for {
-		probe, perr := fetchLatestTick(client)
-		curDay := localDayKey(time.Now())
-		if statusBodyChanged(lastTs, probe.LatestTickUnix, lastDay, curDay, perr != nil) {
-			full, ferr := fetchStatus(client)
-			if ferr != nil {
-				// Transient RPC error (e.g. the daemon is slow and the query
-				// timed out). Keep the view alive showing the last good frame
-				// plus a notice, and retry next cycle — only Esc/Ctrl-C exit.
-				lastErr = ferr
+		// (Re)connect if we have no live client. A daemon restart makes the
+		// previous connection permanently return ErrShutdown, so on any RPC
+		// error below we drop the client and reconnect here next cycle. This is
+		// what lets the view survive a daemon restart instead of getting stuck
+		// forever on "connection is shut down".
+		if client == nil {
+			c, derr := redial()
+			if derr != nil {
+				lastErr = derr
 			} else {
-				reply = full
-				haveData = true
+				client = c
+			}
+		}
+
+		if client != nil {
+			probe, perr := fetchLatestTick(client)
+			if perr != nil {
+				client.Close()
+				client = nil
+				lastErr = perr
+			} else {
 				lastErr = nil
-				lastDay = curDay
-				if perr == nil {
-					lastTs = probe.LatestTickUnix
+				curDay := localDayKey(time.Now())
+				if statusBodyChanged(lastTs, probe.LatestTickUnix, lastDay, curDay, false) {
+					full, ferr := fetchStatus(client)
+					if ferr != nil {
+						client.Close()
+						client = nil
+						lastErr = ferr
+					} else {
+						reply = full
+						haveData = true
+						lastDay = curDay
+						lastTs = probe.LatestTickUnix
+					}
+				}
+				// Refresh the cheap live header fields from the probe (only if
+				// the connection is still good after the optional heavy fetch).
+				if client != nil {
+					reply.UserIdleSeconds = probe.UserIdleSeconds
+					reply.DaemonUptimeSeconds = probe.DaemonUptimeSeconds
+					reply.PermissionState = probe.PermissionState
 				}
 			}
 		}
-		if perr == nil {
-			reply.UserIdleSeconds = probe.UserIdleSeconds
-			reply.DaemonUptimeSeconds = probe.DaemonUptimeSeconds
-			reply.PermissionState = probe.PermissionState
-		}
+
 		clearScreen(out)
 		if haveData {
 			renderStatus(out, reply)
@@ -248,11 +274,14 @@ func runStatusLive(client *rpc.Client) int {
 			fmt.Fprintln(out, "Connecting to daemon…")
 		}
 		if lastErr != nil {
-			fmt.Fprintf(out, "\n⚠ daemon not responding, retrying: %v\n", lastErr)
+			fmt.Fprintf(out, "\n⚠ daemon not responding, reconnecting: %v\n", lastErr)
 		}
 		renderFooter(out, time.Now())
 
 		if st.readEvent() == evtEsc {
+			if client != nil {
+				client.Close()
+			}
 			return 0 // cleanup runs via defer
 		}
 	}

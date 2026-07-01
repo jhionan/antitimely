@@ -132,3 +132,14 @@ func dialOrExit() (*rpc.Client, int) {
 	}
 	return c, 0
 }
+
+// redial opens a fresh daemon connection without printing or exiting on
+// failure. The live status view uses it to reconnect after a daemon restart
+// drops the socket (the old *rpc.Client then permanently returns ErrShutdown).
+func redial() (*rpc.Client, error) {
+	sockPath, err := DefaultSocketPath()
+	if err != nil {
+		return nil, err
+	}
+	return Dial(sockPath)
+}
