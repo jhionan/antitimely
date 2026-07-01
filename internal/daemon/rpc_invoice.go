@@ -231,5 +231,9 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	reply.SenderKey = senderKey
 	reply.IssueDateUnix = doc.IssueDate.Unix()
 	reply.DueDateUnix = doc.DueDate.Unix()
+	reply.FromUnix = from.Unix()
+	reply.ToUnix = to.Unix()
+	reply.Ticks = ticks
+	reply.BillingMode = co.BillingMode
 	return nil
 }

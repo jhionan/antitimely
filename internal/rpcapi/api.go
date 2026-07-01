@@ -103,6 +103,10 @@ type InvoiceGenerateReply struct {
 	SenderKey     string
 	IssueDateUnix int64
 	DueDateUnix   int64
+	FromUnix      int64  // resolved billing-period start
+	ToUnix        int64  // resolved billing-period end (exclusive)
+	Ticks         int64  // billed tick count (0 for monthly_fixed)
+	BillingMode   string // "hourly" | "monthly_fixed"
 }
 
 // --- Allowlist ---

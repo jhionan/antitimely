@@ -186,6 +186,12 @@ func TestRPC_InvoiceGenerate_DryRun(t *testing.T) {
 	if reply.InvoiceID != 0 {
 		t.Error("InvoiceID should be 0 on dry-run")
 	}
+	if reply.BillingMode != "monthly_fixed" {
+		t.Errorf("BillingMode = %q, want monthly_fixed", reply.BillingMode)
+	}
+	if reply.ToUnix <= reply.FromUnix {
+		t.Errorf("period not set: from=%d to=%d", reply.FromUnix, reply.ToUnix)
+	}
 	var n int64
 	if err := db.QueryRow("SELECT COUNT(*) FROM invoices").Scan(&n); err != nil {
 		t.Fatal(err)
