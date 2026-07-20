@@ -96,18 +96,39 @@ type Pipeline struct {
 	// threshold. Reset to zero whenever the project disarms.
 	armedAgentStreak map[int64]int
 	// titleRetryAt is the earliest unix-second at which the window-title
-	// osascript may be spawned again after a denial. Spawning it every tick
-	// while denied churns (and can leak) osascript processes; we back off and
-	// only re-probe periodically. 0 = no backoff in effect.
+	// osascript may be spawned again after a denial or a run of timeouts.
+	// Spawning it every tick while broken churns (and leaks) osascript
+	// processes; we back off and only re-probe periodically. 0 = no backoff.
 	titleRetryAt int64
+	// titleBackoffSec is the current backoff length, doubled on each successive
+	// failed re-probe up to titleBackoffMaxSec and reset to zero on success.
+	// Fixed-interval retries re-probed 1440x/day while denied; growing the gap
+	// keeps a long outage cheap without delaying recovery much.
+	titleBackoffSec int64
+	// titleTimeoutStreak counts consecutive timeouts. Unlike a denial (which is
+	// unambiguous and backs off at once), a single timeout can be transient
+	// system load, so we tolerate a few before backing off.
+	titleTimeoutStreak int
 	// transcriptState is per-session-file tail/offset + last-activity state,
 	// keyed by absolute .jsonl path.
 	transcriptState map[string]transcriptSession
 }
 
-// titleDenyBackoffSec is how long to stop spawning the window-title osascript
-// after an accessibility denial before re-probing once.
-const titleDenyBackoffSec int64 = 60
+// Backoff policy for the window-title osascript — the only remaining call that
+// goes through System Events and can therefore hang or balloon.
+const (
+	// titleDenyBackoffSec is the initial backoff after a failure, and the step
+	// the exponential growth starts from.
+	titleDenyBackoffSec int64 = 60
+	// titleBackoffMaxSec caps the growth. Five minutes bounds a long denial to
+	// ~288 probes/day while still noticing a re-grant reasonably promptly.
+	titleBackoffMaxSec int64 = 300
+	// osascriptTimeoutStreak is how many consecutive timeouts trigger a
+	// backoff. Timeouts, not denials, drove the production leak (2707 killed
+	// osascripts vs 85 title denials), so they must back off too — but a lone
+	// timeout under momentary load shouldn't blind title capture for a minute.
+	osascriptTimeoutStreak = 3
+)
 
 func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	return &Pipeline{
@@ -322,6 +343,24 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	return nil
 }
 
+// backOffTitle arms (or extends) the window-title backoff and returns the
+// number of seconds capture is suppressed for, so callers can log it. The
+// interval starts at titleDenyBackoffSec and doubles per successive failure up
+// to titleBackoffMaxSec; a successful probe resets it.
+func (p *Pipeline) backOffTitle(now int64) int64 {
+	switch {
+	case p.titleBackoffSec == 0:
+		p.titleBackoffSec = titleDenyBackoffSec
+	case p.titleBackoffSec < titleBackoffMaxSec:
+		p.titleBackoffSec *= 2
+	}
+	if p.titleBackoffSec > titleBackoffMaxSec {
+		p.titleBackoffSec = titleBackoffMaxSec
+	}
+	p.titleRetryAt = now + p.titleBackoffSec
+	return p.titleBackoffSec
+}
+
 func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, now int64) (domain.Signal, bool) {
 	fm, err := p.bridge.Frontmost(ctx)
 	if err != nil {
@@ -352,6 +391,8 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 		case terr == nil:
 			title = t
 			p.titleRetryAt = 0
+			p.titleBackoffSec = 0
+			p.titleTimeoutStreak = 0
 			if p.perm != nil {
 				p.perm.Set("ok")
 			}
@@ -359,11 +400,25 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 			if p.perm != nil {
 				p.perm.Set("accessibility_denied")
 			}
-			p.titleRetryAt = now + titleDenyBackoffSec
-			log.Printf("title denied; backing off osascript for %ds", titleDenyBackoffSec)
+			p.titleTimeoutStreak = 0
+			log.Printf("title denied; backing off osascript for %ds", p.backOffTitle(now))
+		case errors.Is(terr, macos.ErrOsascriptTimeout):
+			// A hung osascript is the leak vector: the process can outlive our
+			// SIGKILL (WaitDelay lets us stop waiting on one stuck in an
+			// uninterruptible mach call), so respawning every tick stacks up
+			// multi-GB orphans. Tolerate a couple, then back off like a denial.
+			p.titleTimeoutStreak++
+			if p.titleTimeoutStreak >= osascriptTimeoutStreak {
+				log.Printf("title timed out %dx; backing off osascript for %ds",
+					p.titleTimeoutStreak, p.backOffTitle(now))
+				p.titleTimeoutStreak = 0
+			} else {
+				log.Printf("title: %v", terr)
+			}
 		default:
-			// Transient error (timeout, etc.): keep the title empty but don't
-			// enter the denial backoff — the next tick retries.
+			// Genuinely transient (bad output, script error): keep the title
+			// empty but don't back off — the next tick retries.
+			p.titleTimeoutStreak = 0
 			log.Printf("title: %v", terr)
 		}
 	}

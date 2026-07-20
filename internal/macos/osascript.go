@@ -15,22 +15,38 @@ import (
 // degraded.
 var ErrAccessibilityDenied = errors.New("macos: accessibility/automation permission denied")
 
+// ErrOsascriptTimeout reports that an osascript call outlived its deadline and
+// had to be killed. Callers must treat this differently from an ordinary
+// failure: a hung osascript is usually a wedged System Events, and respawning
+// one every tick is how the daemon accumulated multi-GB orphans in production.
+var ErrOsascriptTimeout = errors.New("macos: osascript timed out")
+
 // Tab is used as the inter-field delimiter in AppleScript return values because
 // bundle IDs and app names can legitimately contain "|", but never a tab.
+//
+// This deliberately uses NSWorkspace rather than System Events. The old script
+// asked System Events for `first application process whose frontmost is true`;
+// that `whose` clause makes System Events materialise and evaluate EVERY
+// application process, which is both slow and the second GB-balloon vector
+// (the first, `windows of`, was removed from titleScript). Worse, it runs
+// through the Accessibility/Automation bridge, so a wedged or unauthorised
+// System Events hangs it until the deadline kills it — every 5s, forever.
+//
+// NSWorkspace's frontmostApplication is an O(1) lookup that needs no
+// Accessibility grant at all. It costs ~330ms vs ~187ms in the happy path
+// (framework load), which at a 5s poll is a fine trade for immunity to the
+// hang, and it means focus tracking keeps working at bundle level even while
+// window titles are denied.
 const frontmostScript = `
-tell application "System Events"
-	set p to first application process whose frontmost is true
-	set bid to ""
-	try
-		set maybeId to bundle identifier of p
-		if maybeId is not missing value then
-			set bid to maybeId
-		end if
-	end try
-	set pn to name of p
-	set pp to unix id of p
-	return bid & tab & pn & tab & (pp as string)
-end tell
+use framework "Foundation"
+set ws to current application's NSWorkspace's sharedWorkspace()
+set a to ws's frontmostApplication()
+set bid to ""
+try
+	set maybeId to (a's bundleIdentifier())
+	if maybeId is not missing value then set bid to (maybeId as string)
+end try
+return bid & tab & (a's localizedName() as string) & tab & ((a's processIdentifier()) as string)
 `
 
 // FrontmostReal returns the currently focused application's bundle id, name,
@@ -229,6 +245,13 @@ func runOsascript(ctx context.Context, script string) (string, error) {
 		s := string(out)
 		if derr := classifyOsascriptErr(s); derr != nil {
 			return "", derr
+		}
+		// A deadline hit means we killed it, not that the script failed. Report
+		// it as such so callers can back off rather than respawning into the
+		// same wedge. Checked after the denial classification because a denial
+		// that happens to race the deadline is still a denial.
+		if cctx.Err() != nil {
+			return "", fmt.Errorf("%w after %s: %v", ErrOsascriptTimeout, osascriptDeadline, err)
 		}
 		return "", fmt.Errorf("osascript: %w (%s)", err, strings.TrimSpace(s))
 	}

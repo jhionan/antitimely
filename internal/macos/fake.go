@@ -7,6 +7,9 @@ import "context"
 type FakeBridge struct {
 	FrontmostInfoVal FrontmostInfo
 	FrontmostErr     error
+	// FrontmostCalls counts Frontmost invocations so tests can assert it is
+	// NOT suppressed by the title backoff.
+	FrontmostCalls int
 
 	FocusedTitle    string
 	FocusedTitleErr error
@@ -35,6 +38,7 @@ type FakeBridge struct {
 }
 
 func (f *FakeBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
+	f.FrontmostCalls++
 	return f.FrontmostInfoVal, f.FrontmostErr
 }
 func (f *FakeBridge) FocusedWindowTitle(ctx context.Context) (string, error) {
