@@ -24,6 +24,9 @@ type BuildDocInput struct {
 	Ticks         int64
 	TickSec       int
 	DiscountCents int64 // flat discount in Currency; 0 = none
+
+	CreditAppliedCents int64  // advance credit consumed by this invoice; 0 = none
+	CreditAppliedRef   string // invoice number of the advance being drawn down
 }
 
 // BuildDoc gathers an InvoiceDoc from the resolved inputs. Pure: no IO, no
@@ -38,24 +41,31 @@ func BuildDoc(in BuildDocInput) (InvoiceDoc, error) {
 	if in.DiscountCents < 0 {
 		return InvoiceDoc{}, fmt.Errorf("discount must not be negative (got %d cents)", in.DiscountCents)
 	}
-	if in.DiscountCents > li.TotalCents {
-		return InvoiceDoc{}, fmt.Errorf("discount %d cents exceeds line-item total %d cents", in.DiscountCents, li.TotalCents)
+	if in.CreditAppliedCents < 0 {
+		return InvoiceDoc{}, fmt.Errorf("credit applied must not be negative (got %d cents)", in.CreditAppliedCents)
+	}
+	if in.DiscountCents+in.CreditAppliedCents > li.TotalCents {
+		return InvoiceDoc{}, fmt.Errorf(
+			"discount %d + credit applied %d exceeds line-item total %d cents",
+			in.DiscountCents, in.CreditAppliedCents, li.TotalCents)
 	}
 	due := in.Now.AddDate(0, 0, in.DueDays)
 	return InvoiceDoc{
-		Number:        in.InvoiceNumber,
-		IssueDate:     in.Now,
-		DueDate:       due,
-		PeriodFrom:    in.PeriodFrom,
-		PeriodTo:      in.PeriodTo,
-		Currency:      in.Currency,
-		ClientName:    in.ClientName,
-		Client:        in.Client,
-		Sender:        in.Sender,
-		LineItemLabel: in.LineItemLabel,
-		LineItem:      li,
-		DiscountCents: in.DiscountCents,
-		Bank:          bank,
-		LogoPath:      in.Sender.LogoPath,
+		Number:             in.InvoiceNumber,
+		IssueDate:          in.Now,
+		DueDate:            due,
+		PeriodFrom:         in.PeriodFrom,
+		PeriodTo:           in.PeriodTo,
+		Currency:           in.Currency,
+		ClientName:         in.ClientName,
+		Client:             in.Client,
+		Sender:             in.Sender,
+		LineItemLabel:      in.LineItemLabel,
+		LineItem:           li,
+		DiscountCents:      in.DiscountCents,
+		CreditAppliedCents: in.CreditAppliedCents,
+		CreditAppliedRef:   in.CreditAppliedRef,
+		Bank:               bank,
+		LogoPath:           in.Sender.LogoPath,
 	}, nil
 }

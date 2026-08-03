@@ -31,6 +31,14 @@ type InvoiceDoc struct {
 	// Discount line; AmountDueCents is the net.
 	DiscountCents int64
 
+	// CreditAppliedCents is the portion of an outstanding advance consumed by
+	// this invoice. Distinct from DiscountCents: only this figure moves the
+	// company's credit balance. CreditAppliedRef names the advance invoice it
+	// came from (FIFO — oldest advance with credit remaining), so the client's
+	// bookkeeper can tie the two documents together.
+	CreditAppliedCents int64
+	CreditAppliedRef   string
+
 	// Bank block to render in "Ways to pay".
 	Bank Bank
 
@@ -38,7 +46,8 @@ type InvoiceDoc struct {
 	LogoPath string
 }
 
-// AmountDueCents is the net payable: line-item total minus any flat discount.
+// AmountDueCents is the net payable: line-item total minus any flat discount
+// and minus any advance credit applied.
 func (d InvoiceDoc) AmountDueCents() int64 {
-	return d.LineItem.TotalCents - d.DiscountCents
+	return d.LineItem.TotalCents - d.DiscountCents - d.CreditAppliedCents
 }

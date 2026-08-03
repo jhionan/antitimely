@@ -146,6 +146,114 @@ func TestBuildDoc_Discount(t *testing.T) {
 	}
 }
 
+func TestBuildDoc_CreditApplied(t *testing.T) {
+	sender := Sender{
+		LegalName:    "JHIONAN RIAN LARA DOS SANTOS",
+		TaxID:        "34.012.215/0001-44",
+		TaxIDLabel:   "CNPJ",
+		AddressLines: []string{"Mateus Leme 2830", "Brazil"},
+		BankAccounts: map[string]Bank{
+			"EUR": {Title: "Wise EUR", Fields: []BankField{{Label: "IBAN", Value: "BE16"}}},
+		},
+	}
+	in := BuildDocInput{
+		Now:                time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC),
+		ClientName:         "Dentix",
+		BillingMode:        "monthly_fixed",
+		Currency:           "EUR",
+		RateCents:          600000, // line total 6,000.00
+		Sender:             sender,
+		InvoiceNumber:      "INV-014",
+		PeriodFrom:         time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		PeriodTo:           time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		DueDays:            0,
+		LineItemLabel:      "Software development",
+		Ticks:              0,
+		TickSec:            5,
+		DiscountCents:      0,
+		CreditAppliedCents: 600000,
+		CreditAppliedRef:   "ES-0007",
+	}
+
+	doc, err := BuildDoc(in)
+	if err != nil {
+		t.Fatalf("BuildDoc: %v", err)
+	}
+	if doc.CreditAppliedCents != 600000 {
+		t.Errorf("CreditAppliedCents = %d, want 600000", doc.CreditAppliedCents)
+	}
+	if doc.CreditAppliedRef != "ES-0007" {
+		t.Errorf("CreditAppliedRef = %q, want %q", doc.CreditAppliedRef, "ES-0007")
+	}
+	if got := doc.AmountDueCents(); got != 0 {
+		t.Errorf("AmountDueCents = %d, want 0", got)
+	}
+}
+
+func TestBuildDoc_RejectsReductionsExceedingLineTotal(t *testing.T) {
+	sender := Sender{
+		LegalName:    "JHIONAN RIAN LARA DOS SANTOS",
+		TaxID:        "34.012.215/0001-44",
+		TaxIDLabel:   "CNPJ",
+		AddressLines: []string{"Mateus Leme 2830", "Brazil"},
+		BankAccounts: map[string]Bank{
+			"EUR": {Title: "Wise EUR", Fields: []BankField{{Label: "IBAN", Value: "BE16"}}},
+		},
+	}
+	in := BuildDocInput{
+		Now:                time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC),
+		ClientName:         "Dentix",
+		BillingMode:        "monthly_fixed",
+		Currency:           "EUR",
+		RateCents:          600000,
+		Sender:             sender,
+		InvoiceNumber:      "INV-014",
+		PeriodFrom:         time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		PeriodTo:           time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		DueDays:            0,
+		LineItemLabel:      "Software development",
+		Ticks:              0,
+		TickSec:            5,
+		DiscountCents:      100000,
+		CreditAppliedCents: 550000, // 650000 > 600000
+	}
+
+	if _, err := BuildDoc(in); err == nil {
+		t.Fatal("expected an error when discount+credit exceeds the line total")
+	}
+}
+
+func TestBuildDoc_RejectsNegativeCredit(t *testing.T) {
+	sender := Sender{
+		LegalName:    "JHIONAN RIAN LARA DOS SANTOS",
+		TaxID:        "34.012.215/0001-44",
+		TaxIDLabel:   "CNPJ",
+		AddressLines: []string{"Mateus Leme 2830", "Brazil"},
+		BankAccounts: map[string]Bank{
+			"EUR": {Title: "Wise EUR", Fields: []BankField{{Label: "IBAN", Value: "BE16"}}},
+		},
+	}
+	in := BuildDocInput{
+		Now:                time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC),
+		ClientName:         "Dentix",
+		BillingMode:        "monthly_fixed",
+		Currency:           "EUR",
+		RateCents:          300000,
+		Sender:             sender,
+		InvoiceNumber:      "INV-014",
+		PeriodFrom:         time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		PeriodTo:           time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		DueDays:            0,
+		LineItemLabel:      "Software development",
+		Ticks:              0,
+		TickSec:            5,
+		CreditAppliedCents: -1,
+	}
+	if _, err := BuildDoc(in); err == nil {
+		t.Fatal("expected an error for negative credit applied")
+	}
+}
+
 func TestBuildDoc_RejectsMissingBankBlock(t *testing.T) {
 	sender := Sender{LegalName: "X", BankAccounts: map[string]Bank{}}
 	in := BuildDocInput{
