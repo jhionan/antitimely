@@ -431,3 +431,162 @@ func TestRPC_InvoiceGenerate_NoCreditBillsFull(t *testing.T) {
 		t.Errorf("TotalCents = %d, want 600000", reply.TotalCents)
 	}
 }
+
+func TestRPC_InvoiceAdvance_CreatesCreditWithoutConsumingIt(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 120.0)
+	// Pre-existing credit that must NOT be auto-applied to a new advance.
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind)
+		SELECT id, 1, 1, 'ES-0007', 1462300, 'CAD', 'advance' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceAdvanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "BClouder", AmountCents: 2000000}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.TotalCents != 2000000 {
+		t.Errorf("TotalCents = %d, want 2000000 gross", reply.TotalCents)
+	}
+	if reply.CreditRemainingCents != 3462300 {
+		t.Errorf("CreditRemainingCents = %d, want 3462300", reply.CreditRemainingCents)
+	}
+
+	var kind string
+	var applied int64
+	if err := db.QueryRow(
+		`SELECT kind, credit_applied_cents FROM invoices WHERE number=?`, reply.Number,
+	).Scan(&kind, &applied); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "advance" || applied != 0 {
+		t.Errorf("row = (%q, %d), want (advance, 0)", kind, applied)
+	}
+}
+
+func TestRPC_InvoiceAdvance_RejectsNonPositiveAmount(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	var reply rpcapi.InvoiceAdvanceReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "BClouder", AmountCents: 0}, &reply)
+	if err == nil {
+		t.Fatal("expected an error for a zero amount")
+	}
+}
+
+func TestRPC_InvoiceAdvance_DoesNotMoveAnchor(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	q := store.New(db)
+	ctx := context.Background()
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind)
+		SELECT id, 1000, 1000, 'ES-0006', 537700, 'CAD', 'hourly' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.InvoiceAdvanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "BClouder", AmountCents: 100000}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := db.QueryRow(`SELECT id FROM companies WHERE name='BClouder'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := q.LastInvoiceSentForCompany(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anchor != 1000 {
+		t.Errorf("anchor = %d, want 1000 — an advance must close no period", anchor)
+	}
+}
+
+func TestRPC_InvoiceAdvance_RejectsNonBillable(t *testing.T) {
+	client, _, _ := setupRPCServer(t)
+	if err := client.Call(rpcapi.ServiceName+".CompanyAdd",
+		rpcapi.CompanyAddArgs{Name: "Foca.app"}, &rpcapi.CompanyAddReply{}); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.InvoiceAdvanceReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "Foca.app", AmountCents: 100000}, &reply)
+	if err == nil {
+		t.Error("expected error for a company with billing_mode='none'")
+	}
+}
+
+func TestRPC_InvoiceAdvance_RejectsNoBilledFrom(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+	if err := client.Call(rpcapi.ServiceName+".CompanyAdd",
+		rpcapi.CompanyAddArgs{Name: "NoSender"}, &rpcapi.CompanyAddReply{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SetCompanyBilling(ctx, store.SetCompanyBillingParams{
+		BillingMode: "hourly",
+		Currency:    sql.NullString{String: "CAD", Valid: true},
+		RateCents:   sql.NullInt64{Int64: 5000, Valid: true},
+		Name:        "NoSender",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.InvoiceAdvanceReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "NoSender", AmountCents: 100000}, &reply)
+	if err == nil {
+		t.Error("expected error for a company with no billed_from sender")
+	}
+}
+
+func TestRPC_InvoiceAdvance_RejectsNoRate(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+	if err := client.Call(rpcapi.ServiceName+".CompanyAdd",
+		rpcapi.CompanyAddArgs{Name: "NoRate"}, &rpcapi.CompanyAddReply{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SetCompanyBilling(ctx, store.SetCompanyBillingParams{
+		BillingMode: "hourly",
+		Currency:    sql.NullString{String: "CAD", Valid: true},
+		BilledFrom:  sql.NullString{String: "br", Valid: true},
+		Name:        "NoRate",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.InvoiceAdvanceReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "NoRate", AmountCents: 100000}, &reply)
+	if err == nil {
+		t.Error("expected error for a company with no rate")
+	}
+}
+
+func TestRPC_InvoiceAdvance_DryRun(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+
+	var reply rpcapi.InvoiceAdvanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{CompanyName: "BClouder", AmountCents: 100000, DryRun: true}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.TotalCents != 100000 {
+		t.Errorf("TotalCents = %d, want 100000", reply.TotalCents)
+	}
+	if _, err := os.Stat(reply.PDFPath); err != nil {
+		t.Errorf("dry-run PDF missing at %s", reply.PDFPath)
+	}
+	var n int64
+	if err := db.QueryRow("SELECT COUNT(*) FROM invoices").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("invoices rows = %d on dry-run, want 0", n)
+	}
+}

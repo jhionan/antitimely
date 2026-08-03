@@ -281,3 +281,205 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	reply.CreditRemainingCents = creditRemaining - applied
 	return nil
 }
+
+// InvoiceAdvance records a prepayment: a company pays money up front, before
+// any hours are billed. It mirrors InvoiceGenerate's config/sender/number/
+// render/insert sequence but deliberately differs in three ways: it never
+// reads or applies existing credit (a fresh advance must not be discounted
+// by a balance that predates it), it never moves the billing anchor (an
+// advance bills no hours, so LastInvoiceSentForCompany already excludes
+// kind='advance' rows — see Task 5), and its LineItem is constructed
+// directly from the amount rather than derived from tick counts.
+func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply *rpcapi.InvoiceAdvanceReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+
+	if args.AmountCents <= 0 {
+		return fmt.Errorf("advance amount must be positive (got %d cents)", args.AmountCents)
+	}
+
+	co, err := s.Q.GetCompanyForInvoice(ctx, args.CompanyName)
+	if err != nil {
+		return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
+	}
+	if co.BillingMode == "none" {
+		return fmt.Errorf("company %q is not billable (billing_mode='none')", co.Name)
+	}
+	if !co.BilledFrom.Valid || co.BilledFrom.String == "" {
+		return fmt.Errorf("company %q has no billed_from sender", co.Name)
+	}
+	if co.RateCents.Int64 <= 0 {
+		return fmt.Errorf("company %q has no rate; cannot express an advance in hours", co.Name)
+	}
+
+	cfgPath, err := configPath()
+	if err != nil {
+		return err
+	}
+	cfg, err := invoice.LoadSendersConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	if issues := cfg.Validate(); len(issues) > 0 {
+		return fmt.Errorf("invalid senders config: %v", issues)
+	}
+	senderKey := co.BilledFrom.String
+	sender, ok := cfg.Senders[senderKey]
+	if !ok {
+		return fmt.Errorf("sender %q not in config (run `atl invoice show-senders`)", senderKey)
+	}
+
+	var now time.Time
+	if args.IssueDateUnix > 0 {
+		now = time.Unix(args.IssueDateUnix, 0).Local()
+	} else {
+		now = time.Now()
+	}
+
+	// Read the credit balance BEFORE BeginTx (same single-connection
+	// deadlock hazard as InvoiceGenerate): the reply reports the balance
+	// *after* this advance, but this advance itself never draws it down.
+	creditBefore, err := s.Q.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
+		CompanyID: co.ID,
+		Currency:  co.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("read credit balance: %w", err)
+	}
+
+	if !args.DryRun {
+		if err := s.Q.SeedSenderState(ctx, store.SeedSenderStateParams{
+			SenderKey:         senderKey,
+			NextInvoiceNumber: sender.Invoice.NextNumber,
+		}); err != nil {
+			return err
+		}
+	}
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	qtx := s.Q.WithTx(tx)
+
+	var allocatedNumber int64
+	if args.DryRun {
+		row := tx.QueryRowContext(ctx, "SELECT next_invoice_number FROM sender_state WHERE sender_key = ?", senderKey)
+		if err := row.Scan(&allocatedNumber); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				allocatedNumber = sender.Invoice.NextNumber
+			} else {
+				return err
+			}
+		}
+	} else {
+		a, err := qtx.AllocateNextInvoiceNumber(ctx, senderKey)
+		if err != nil {
+			return fmt.Errorf("allocate invoice number: %w", err)
+		}
+		allocatedNumber = a
+	}
+
+	number := invoice.FormatInvoiceNumber(sender.Invoice.NumberPrefix, sender.Invoice.NumberPad, allocatedNumber)
+
+	// Hourly line shape: amount / rate hours at rate. Exact when the amount is
+	// a whole multiple of the rate's cents-per-hour; the LineItem carries the
+	// authoritative total either way.
+	li := invoice.LineItem{
+		QuantityHoursTimes100: args.AmountCents * 100 / co.RateCents.Int64,
+		UnitCents:             co.RateCents.Int64,
+		TotalCents:            args.AmountCents,
+	}
+
+	bank, ok := sender.BankFor(co.Currency.String)
+	if !ok {
+		return fmt.Errorf("sender has no bank account for currency %q (and no also_accepts fallback)", co.Currency.String)
+	}
+	doc := invoice.InvoiceDoc{
+		Number:        number,
+		IssueDate:     now,
+		DueDate:       now.AddDate(0, 0, cfg.Invoice.DueDays),
+		Currency:      co.Currency.String,
+		ClientName:    co.Name,
+		Client:        cfg.Clients[co.Name], // zero value if no clients entry
+		Sender:        sender,
+		LineItemLabel: cfg.Invoice.LineItemLabel,
+		LineItem:      li,
+		Bank:          bank,
+		LogoPath:      sender.LogoPath,
+	}
+
+	var pdfPath string
+	if args.DryRun {
+		f, ferr := os.CreateTemp("", "atl-dryrun-*.pdf")
+		if ferr != nil {
+			return ferr
+		}
+		f.Close()
+		pdfPath = f.Name()
+	} else {
+		// Per-sender output_dir wins and is used directly; otherwise fall back
+		// to the global output_dir with a <senderKey>/ subfolder.
+		var senderDir string
+		if sender.OutputDir != "" {
+			senderDir, err = expandHome(sender.OutputDir)
+			if err != nil {
+				return err
+			}
+		} else {
+			outDir, err := expandHome(cfg.Invoice.OutputDir)
+			if err != nil {
+				return err
+			}
+			senderDir = filepath.Join(outDir, senderKey)
+		}
+		if err := os.MkdirAll(senderDir, 0o700); err != nil {
+			return err
+		}
+		pdfPath = filepath.Join(senderDir, number+".pdf")
+	}
+	if err := invoice.RenderPDF(doc, pdfPath); err != nil {
+		_ = os.Remove(pdfPath)
+		return err
+	}
+
+	if !args.DryRun {
+		if _, err := qtx.InsertInvoiceFull(ctx, store.InsertInvoiceFullParams{
+			CompanyID:  co.ID,
+			SentAt:     now.Unix(),
+			Note:       args.Note,
+			CreatedAt:  time.Now().Unix(),
+			Number:     sql.NullString{String: number, Valid: true},
+			PdfPath:    sql.NullString{String: pdfPath, Valid: true},
+			TotalCents: sql.NullInt64{Int64: doc.AmountDueCents(), Valid: true},
+			Currency:   sql.NullString{String: co.Currency.String, Valid: true},
+			SenderKey:  sql.NullString{String: senderKey, Valid: true},
+
+			Kind:               "advance",
+			CreditAppliedCents: 0,
+			DiscountCents:      0,
+		}); err != nil {
+			_ = os.Remove(pdfPath)
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = os.Remove(pdfPath)
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+
+	reply.Number = number
+	reply.PDFPath = pdfPath
+	reply.Currency = doc.Currency
+	reply.TotalCents = doc.AmountDueCents()
+	reply.CreditRemainingCents = creditBefore + doc.AmountDueCents()
+	return nil
+}

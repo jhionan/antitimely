@@ -16,7 +16,7 @@ import (
 
 func cmdInvoice(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|show-senders|setup> ...")
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|advance|show-senders|setup> ...")
 		return 64
 	}
 	switch args[0] {
@@ -28,6 +28,8 @@ func cmdInvoice(args []string) int {
 		return invoiceDelete(args[1:])
 	case "generate":
 		return invoiceGenerate(args[1:])
+	case "advance":
+		return invoiceAdvance(args[1:])
 	case "show-senders":
 		return invoiceShowSenders(args[1:])
 	case "setup":
@@ -213,6 +215,63 @@ func invoiceGenerate(args []string) int {
 			invoice.FormatMoney(reply.CreditAppliedCents, reply.Currency),
 			invoice.FormatMoney(reply.CreditRemainingCents, reply.Currency))
 	}
+	openAndReveal(reply.PDFPath)
+	return 0
+}
+
+func invoiceAdvance(args []string) int {
+	fs := flag.NewFlagSet("invoice advance", flag.ExitOnError)
+	amount := fs.String("amount", "", "Prepayment amount in the company's currency, e.g. 20000 or 20000.00 (required)")
+	note := fs.String("note", "", "Stored in invoices.note (not printed on PDF)")
+	issueDate := fs.String("issue-date", "", "Date on the invoice: YYYY-MM-DD (default: today)")
+	dryRun := fs.Bool("dry-run", false, "Render PDF to a temp file without DB writes")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice advance <company> --amount=AMOUNT [--note=...] [--issue-date=YYYY-MM-DD] [--dry-run]")
+		return 64
+	}
+	company := fs.Arg(0)
+	amountCents, err := parseMoneyCents(*amount)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid --amount:", err)
+		return 64
+	}
+	if amountCents <= 0 {
+		fmt.Fprintln(os.Stderr, "--amount is required and must be positive")
+		return 64
+	}
+	issueUnix, err := parseOptionalDate(*issueDate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid --issue-date:", err)
+		return 64
+	}
+
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	var reply rpcapi.InvoiceAdvanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceAdvance", rpcapi.InvoiceAdvanceArgs{
+		CompanyName:   company,
+		AmountCents:   amountCents,
+		Note:          *note,
+		IssueDateUnix: issueUnix,
+		DryRun:        *dryRun,
+	}, &reply); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tag := ""
+	if *dryRun {
+		tag = " (dry-run)"
+	}
+	fmt.Printf("Recorded advance %s%s — %s (%s)\n", reply.Number, tag, reply.PDFPath,
+		invoice.FormatMoney(reply.TotalCents, reply.Currency))
+	fmt.Printf("Credit remaining: %s\n", invoice.FormatMoney(reply.CreditRemainingCents, reply.Currency))
 	openAndReveal(reply.PDFPath)
 	return 0
 }

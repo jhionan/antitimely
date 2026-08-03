@@ -113,6 +113,22 @@ type InvoiceGenerateReply struct {
 	CreditRemainingCents int64 // remaining balance after this invoice
 }
 
+type InvoiceAdvanceArgs struct {
+	CompanyName   string
+	AmountCents   int64
+	Note          string
+	IssueDateUnix int64 // 0 = now
+	DryRun        bool
+}
+
+type InvoiceAdvanceReply struct {
+	Number               string
+	PDFPath              string
+	Currency             string
+	TotalCents           int64
+	CreditRemainingCents int64
+}
+
 // --- Allowlist ---
 
 type WatchAddArgs struct {
