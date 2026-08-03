@@ -75,13 +75,21 @@ This step stays a **Claude task** — it needs judgment that the CLI can't do. D
 - `~/focaApp/bclouder/daas/daas-back-end` (.NET) and `~/focaApp/bclouder/daas/daas-front-end` (Angular) — Daas
 - `~/focaApp/bclouder/capex-sql/daas-back-end` — Daas worktree (capex branch)
 - `~/focaApp/bclouder/vcna/vcna-invoice-scanner` — VCNA
+- `~/focaApp/bclouder/vcna/vcna-invoice-email-reader`, `.../vcna-packing-slip-email-reader`, `.../vcna-reseller-email-reader` — VCNA e-mail intake Lambdas. **Most VCNA time lands here**, not in the scanner (ES-0006: 8.39 h in the readers, zero scanner commits). Find the real repos for a period by asking the ticks where the time was: `SELECT o.cwd, COUNT(DISTINCT t.ts) FROM ticks t JOIN observations o ON o.id=t.observation_id WHERE t.project_id=<id> AND t.ts>=$START AND t.ts<$END GROUP BY o.cwd;`
 - `~/focaApp/bclouder/rumo/rumo-mobile` — Rumo
 
 ```bash
 # Use commit TIMES so edge days are attributed to the right invoice window:
-git -C <repo> log --all --no-merges --since=<START> --until=<END> --date=format:'%Y-%m-%d %H:%M' --pretty='%cd | %s'
+git -C <repo> log --all --no-merges --since=<START> --until=<END> --date=format:'%Y-%m-%d %H:%M' --pretty='%cd | %an | %s'
 ```
 Use `--all` (all worktree branches) and NO `--author` filter — commits span multiple identities (`jhionan@gmail.com` *and* `37809501+jhionan@users.noreply.github.com`) plus teammates.
+
+⚠️ **Then filter by author before writing a single line.** Unfiltered is right for *seeing* the period; it is wrong for *describing* it. The repos are shared, and a teammate can out-commit you in one of them — in ES-0006 the front-end held 114 of yours, **102 of Jéssica's** (`jessica.mlb@gmail.com` — the `tema:`/`redesign:`/`grids:` and GeVia Ordem-de-Serviço work) and 3 of Murilo's (`murilo.nerone@bclouder.com` — geolocation, report caminhão, scoping PDF). Describing their commits as your work bills the client for someone else's output. Get the split first, then read only your own:
+```bash
+git -C <repo> log --all --no-merges --since=<START> --until=<END> --pretty='%an <%ae>' | sort | uniq -c | sort -rn
+git -C <repo> log --all --no-merges --author='jhionan@gmail.com' --since=<START> --until=<END> --date=format:'%Y-%m-%d %H:%M' --pretty='%cd | %s'
+```
+(Caught only because Rian said so mid-run on ES-0006 — the check was not in this runbook.)
 
 **Source B — Claude Code console/transcript history** (what you actually worked on — catches design, debugging, and low-commit days that commits alone miss). Extract the per-day prompts:
 
@@ -114,7 +122,24 @@ for day in sorted(by_day):
 PY
 ```
 
+⚠️ **The `seen`/`>= 7` cap above hides the secondary project's day.** It prints the loudest ~7 prompts per day, and on a day dominated by one product the other product's work vanishes — on ES-0006 that turned 3.09 h of VCNA production deployment into "documented the routing map". Whenever a day carries hours on **more than one project** (check the per-day per-project breakdown from Step 4), re-run the extractor **scoped to that project's transcript folder and uncapped**:
+```bash
+# e.g. VCNA only: glob "./-Users-rian-focaApp-bclouder-vcna*/*.jsonl", drop the `if len(seen) >= 7: break`
+```
+Also exclude the automated `"Review this change for security vulnerabilities"` prompts when judging whether a day has real transcript evidence — they fire from a hook, not from you, and a day can look "covered" while holding nothing but those.
+
 **Reconcile each day against both sources, then write the Work column in client-facing prose** (see ES-0002/ES-0003 for tone): product-prefixed (`DaaS —`, `Rumo —`, `VCNA —`), benefit/feature-oriented, **no internal jargon** (no migration numbers, class names, branch names, cwd paths). One line per day. Fold manual entries (e.g. meetings logged via tick backfill) into that day's note.
+
+**Source C — shell history** (`~/.zsh_history`, weak/corroborating only). Extended history is on, so lines are `: <epoch>:<dur>;<cmd>` and can be windowed:
+```bash
+python3 -c "
+import re,datetime
+for l in open('$HOME/.zsh_history','rb'):
+    m=re.match(r'^: (\d+):\d+;(.*)$', l.decode('utf-8','replace').rstrip())
+    if m and $START <= int(m.group(1)) < $END:
+        print(datetime.datetime.fromtimestamp(int(m.group(1))), m.group(2)[:110])"
+```
+Expect mostly noise (`brew upgrade`, `atl`, `hunk`) — on ES-0006 it changed no line. Its two real uses: **corroborating** a day (`scrcpy -d` on 07-22 backs the Rumo on-device notification work) and **spotting non-BClouder work** that must not leak into the descriptions (`espaco-kids-export.sql`, `flutter run ... .env.patients.dev`). Never write a line from Source C alone.
 
 **Anti-fabrication rule (learned the hard way on ES-0004 / 06-16):** if a day has tracked hours but you find NO commits and NO transcript activity for it, do NOT invent a plausible description — say the work is uncaptured, or ask. A fabricated line nearly went to the client. Every line must trace to Source A or Source B.
 

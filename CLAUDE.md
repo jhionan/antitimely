@@ -38,7 +38,7 @@ The daemon runs under launchd (`com.rian.antitimely`). `make rebuild` cycles it;
 
 **Data model & the dedup rule that matters most.** An `observation` is a unique `(source, bundle_id, window_title, binary_name, cwd)` fingerprint, stored once. A `tick` is `(ts, observation_id, project_id)` on a 5-second grid; PK `(ts, observation_id)`. A project's hours = `COUNT(DISTINCT ts) × 5s`. **Company-level billable dedups across projects** — a second worked on two projects at once bills once. This deduped total is what `atl invoice generate` charges; a plain per-project sum (all hours worked) is higher. Do not confuse the two (see gotchas).
 
-**Rule matching** (`internal/domain/match.go`, pure/zero-dep): first rule (by priority, then age) whose every set field matches wins. cwd prefix is literal `cwd == prefix || cwd startsWith prefix+"/"` (case-sensitive); bundle id / binary exact; window title substring. `atl review` creates a rule **and** retroactively retags all matching past ticks in one transaction (`AssignSignature` in rpc.go: `AddRule` + `ApplyRuleRetroactivelyCounted` + `ReloadCache`).
+**Rule matching** (`internal/domain/match.go`, pure/zero-dep): first rule (by priority, then age) whose every set field matches wins. cwd prefix is literal `cwd == prefix || cwd startsWith prefix+"/"` (case-sensitive); bundle id / binary exact; window title substring. `atl review` creates a rule **and** retroactively retags all matching past ticks in one transaction (`TagSignature` in rpc.go: `AddRule` + `ApplyRuleRetroactivelyCounted` + `ReloadCache`); `IgnoreSignature` is the sibling that marks an observation ignored instead of tagging it.
 
 **Layers:**
 ```
@@ -46,6 +46,7 @@ internal/domain/   pure Go — types, rule matching, generalization (zero deps, 
 internal/store/    sqlc-GENERATED SQLite bindings — never hand-edit; edit schema.sql/queries.sql + `make sqlc`
 internal/macos/    the ONLY place subprocesses live (osascript/ps/lsof/ioreg); fake.go for tests
 internal/daemon/   pipeline, poller, cache, RPC handlers, WAL checkpointer, lifecycle
+internal/invoice/  invoice numbering, line items, formatting, PDF rendering (`atl invoice generate`)
 internal/rpcapi/   shared net/rpc request/reply types
 internal/cli/      hand-rolled subcommand dispatch + interactive menu
 ```
@@ -55,6 +56,7 @@ internal/cli/      hand-rolled subcommand dispatch + interactive menu
 ## Non-obvious gotchas
 
 - **Invoice hours ≠ timesheet hours.** Invoice = **deduped** company-level `COUNT(DISTINCT ts)` (`atl invoice generate`). Timesheet = **all hours worked** (per-project sums, always ≥ invoice). Full monthly procedure is in `docs/billing-runbook.md`.
+- **Timesheet descriptions must be filtered by commit author.** The repos are shared — a period can hold more teammate commits than yours (ES-0006: 102 of 216 front-end commits were a teammate's). Describing them as your work bills someone else's output. Check `%an` before writing any line; see `docs/billing-runbook.md` Step 5.
 - **Only `atl invoice generate <company>` produces a PDF** (+ number + anchor). The interactive menu's "Send invoice" and `atl invoice send` **only record a billing anchor** — using them thinking they "send the invoice" closes the period with no document.
 - **`internal/store/*.go` is generated.** SQL changes go in `schema.sql` / `queries.sql`, then `make sqlc`.
 - **Keep syscalls behind `internal/macos`.** The rest of the code stays testable via the fake bridge; don't shell out elsewhere.
