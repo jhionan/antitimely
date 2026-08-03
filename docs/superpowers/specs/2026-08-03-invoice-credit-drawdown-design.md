@@ -1,71 +1,99 @@
 # Advance credit and automatic invoice drawdown — design
 
 **Date:** 2026-08-03
-**Status:** approved (brainstorming) — ready for implementation plan
+**Status:** approved (brainstorming) — revised after adversarial review — ready for implementation plan
 
 ## Problem
 
 BClouder asked to be invoiced 20,000.00 CAD for August 2026. Hours actually tracked in the period came to 5,377.00 CAD (`ES-0006`), so the remaining 14,623.00 CAD was issued as an advance (`ES-0007`, 292.46 h at 50.00 CAD/h) — money paid before the work exists.
 
-That advance has to be worked off. Every subsequent invoice should bill the full value of the hours tracked, then discount that value down — to zero while the advance still covers it, and to the excess once it doesn't — until the credit reaches zero and invoices resume billing normally.
+That advance has to be worked off. Every subsequent invoice should bill the full value of the hours tracked, then reduce that value by the advance — to zero while the advance still covers it, and to the excess once it doesn't — until the credit reaches zero and invoices resume billing normally.
 
-Nothing in antitimely models this. `atl invoice generate` computes hours × rate and charges it. `--discount` exists but is a manual flat number the operator must compute and remember, capped at the line-item total, and recorded nowhere — so the remaining credit lives only in someone's head. `ES-0007` itself had to be produced by a throwaway Go program because there is no fixed-amount path for an hourly company.
+Nothing in antitimely models this. `atl invoice generate` computes hours × rate and charges it. `--discount` exists but is a manual flat number the operator must compute and remember, recorded nowhere — so the remaining credit lives only in someone's head. `ES-0007` itself had to be produced by a throwaway Go program because there is no fixed-amount path for an hourly company.
 
 ## Goals
 
 - **Store the advance** so the tool, not the operator, knows a credit exists.
-- **Apply it automatically** on every `atl invoice generate`, discounting the invoice by `min(remaining_credit, line_total)` until the credit is exhausted.
+- **Apply it automatically** on every `atl invoice generate`, reducing the invoice by `min(remaining_credit, line_total)` until the credit is exhausted.
+- **Create advances in-tool**, from both the CLI and the interactive menu.
 - **Make the balance readable** on demand, in money and in hours-to-break-even.
-- **Keep the invoice honest**: the client sees hours worked, the advance applied, and what is due.
+- **Keep the invoice honest**: the client sees hours worked, the advance applied (with the advance's invoice number), and what is due.
 - **Never drift**: the balance must be derivable from issued documents, not held as a mutable counter.
 
 ## Non-goals
 
-- **No `atl invoice advance` command.** Creating a *future* advance stays a manual job (as `ES-0007` was). Adding it is ~30 lines reusing the generate path, but there is exactly one advance so far; revisit on the second.
 - **No remaining-balance line on the client-facing PDF.** The invoice explains its own total (hours, advance applied, amount due) but does not carry a running account balance — that is a statement fact, and Spanish autónomo invoices are better kept minimal. Reversible later: one line in `pdf.go`.
-- **No `credits` table, no multi-advance lifecycle** (partial refunds, expiry, credits not tied to an invoice). The chosen model upgrades into one cleanly if that day comes.
-- No change to how hours are counted, how the anchor is chosen for hourly invoices, or how PDFs are laid out beyond a single label.
+- **No `credits` table, no multi-advance lifecycle** (expiry, credits not tied to an invoice). The chosen model upgrades into one cleanly if that day comes.
+- **No refund / credit-note / write-off path.** See *Accepted gaps*.
+- No change to how hours are counted or to PDF layout beyond the reduction rows.
+
+## Accepted gaps
+
+- **Stranded credit has no exit.** If the relationship ends with credit remaining, there is no refund, write-off, or rectifying-document path; clearing it means hand-editing SQL or issuing a contrived invoice. The design self-terminates only while work continues.
+- **Correction relies on `atl invoice delete`.** For an already-issued Spanish *factura* the conventional instrument is a rectifying document, not deletion — deletion punches a permanent gap in the numbering (`sender_state` never decrements) and orphans the PDF. Guarded (below) but not solved. Worth raising with the accountant, along with whether a 0.00-due invoice is acceptable as an issued factura.
+- **Tax is hardcoded 0** (`pdf.go`, `Total tax`), consistent with services exported to a Canadian client. If this model is ever reused for a domestic/EU client, an advance's tax point normally falls at the date of payment and presenting a drawdown as a discount would understate the taxable base.
 
 ## Data model
 
-Two columns on `invoices`, added to `schema.sql`'s `CREATE TABLE` (fresh DBs) **and** appended to the idempotent `invoiceMigrations` list in `internal/daemon/daemon.go` (existing DBs), tolerating `duplicate column` like the entries already there:
+Three columns on `invoices`, added to `schema.sql`'s `CREATE TABLE` (fresh DBs) **and** appended to the idempotent `invoiceMigrations` list in `internal/daemon/daemon.go` (existing DBs), tolerating `duplicate column` like the entries already there:
 
 ```sql
-kind            TEXT NOT NULL DEFAULT 'hourly',   -- 'hourly' | 'advance'
-discount_cents  INTEGER NOT NULL DEFAULT 0        -- what this invoice consumed
+kind                  TEXT NOT NULL DEFAULT 'hourly'
+                        CHECK (kind IN ('hourly','advance')),
+credit_applied_cents  INTEGER NOT NULL DEFAULT 0,   -- drawdown; the ONLY thing the balance counts
+discount_cents        INTEGER NOT NULL DEFAULT 0    -- manual goodwill; never touches the balance
 ```
 
-The defaults are correct for the six pre-existing rows (`ES-0001`–`ES-0006`): they are hourly and they discounted nothing. `ES-0007` is the one row the defaults get wrong — it is an advance — and is corrected by the one-off backfill in **Manual step** below.
+The defaults are correct for the six pre-existing rows (`ES-0002`–`ES-0006` plus the numberless May anchor row at id 1): all hourly, none discounted. `ES-0007` is the one row the defaults get wrong — it is an advance — and is corrected by the backfill in *Manual steps*.
 
-The balance is **derived, never stored** — one query in `queries.sql`, then `make sqlc`:
+**Two columns, not one, and not a `discount_kind` enum.** An earlier draft reused a single `discount_cents` for both concepts and forbade `--discount` while a credit was live. Adversarial review showed the escape hatch (`--no-credit --discount=N`) walked straight through the guard: the balance subtracted all discounts unconditionally, so a 500 CAD goodwill discount silently destroyed 500 CAD of the client's prepayment. Splitting the column removes the ambiguity at the source, lets both coexist on one invoice, and deletes the error rule entirely.
+
+**The `CHECK` ships with the column, not later.** SQLite accepts a `CHECK` on `ALTER TABLE ADD COLUMN` even on a STRICT, non-empty table (verified against a copy of the live DB with this project's own driver). Because `daemon.go` tolerates `duplicate column`, there is exactly one chance to include it — retrofitting later needs the full table-rebuild that `migrateObservationsSourceCheck` performs for `observations.source`. It matters because no Go code writes `'advance'` for the existing row: the only writer is a hand-typed `sqlite3 UPDATE`, and a silent `'Advance'` would zero the credit and re-bill the client 14,623.
+
+The balance is **derived, never stored** — in `queries.sql`, then `make sqlc`:
 
 ```sql
 -- name: CompanyCreditBalance :one
 SELECT COALESCE(SUM(CASE WHEN kind = 'advance' THEN total_cents ELSE 0 END), 0)
-     - COALESCE(SUM(discount_cents), 0) AS remaining_cents
-FROM invoices WHERE company_id = ?;
+     - COALESCE(SUM(credit_applied_cents), 0) AS remaining_cents
+FROM invoices
+WHERE company_id = ? AND currency = ?;
+
+-- name: CompanyCreditRows :many
+SELECT number, kind, total_cents, credit_applied_cents, sent_at
+FROM invoices
+WHERE company_id = ? AND currency = ?
+  AND (kind = 'advance' OR credit_applied_cents > 0)
+ORDER BY sent_at DESC, id DESC;
 ```
 
-This works because `total_cents` on an hourly row already stores the **net** payable (`AmountDueCents()`, i.e. after discount), so advances-minus-discounts-applied is the entire story. For BClouder today it evaluates to `1462300 - 0` = 14,623.00 CAD.
+`currency` is a filter, not decoration: `SetCompanyBilling` can change a company's currency, after which a CAD credit would otherwise discount a EUR invoice at 1:1. The `id DESC` tie-break matters because `ES-0006` and `ES-0007` share a `sent_at` exactly.
 
-Deriving rather than storing buys three things: no counter to drift, `--dry-run` safe by construction, and a full audit trail — every CAD of the advance is traceable to the invoice that consumed it.
+This works because `total_cents` on an hourly row stores the **net** payable (`rpc_invoice.go` passes `doc.AmountDueCents()`), so advances-minus-drawdowns is the whole story. Deriving rather than storing buys no counter to drift, `--dry-run` safe by construction, and every CAD traceable to the invoice that consumed it.
 
-**`kind` is validated in Go, not by the DB.** SQLite cannot add a `CHECK` constraint via `ALTER TABLE ADD COLUMN`; enforcing it would need the table-rebuild dance that `migrateObservationsSourceCheck` performs for `observations.source`. Not worth it — the only writer is our own code.
+**`CompanyCreditRows` returns nullable `number`/`total_cents`** (the id-1 anchor row has both NULL) — handle in Go, don't assume.
 
 ## Generation flow
 
 One new step in `InvoiceGenerate` (`internal/daemon/rpc_invoice.go`), after the line item is computed and before `invoice.BuildDoc`:
 
 ```
-line_total = hours × rate                    (unchanged)
-credit     = CompanyCreditBalance(company)   (new)
-applied    = min(credit, line_total)
-due        = line_total − applied
+line_total = hours × rate                            (unchanged)
+goodwill   = args.DiscountCents                      (explicit --discount, usually 0)
+credit     = CompanyCreditBalance(company, currency) (new)
+applied    = max(0, min(credit, line_total − goodwill))
+due        = line_total − goodwill − applied
 ```
 
-`applied` is passed as the existing `BuildDocInput.DiscountCents`, so the PDF's `Subtotal` / `Discount` / `Amount Due` block and `InvoiceDoc.AmountDueCents()` work untouched. The row written back records `kind='hourly'`, `discount_cents=applied`, `total_cents=due` — which is what keeps the next balance query correct.
+Goodwill is applied first and the credit fills what remains, so `goodwill + applied` can never exceed `line_total` and trip `BuildDoc`'s validation.
 
-Worked example, 14,623.00 credit:
+**The `max(0, …)` clamp is load-bearing, not defensive.** Without it a negative balance — reachable by deleting an advance after a partial drawdown — makes `applied` negative, `BuildDoc` returns *"discount must not be negative"*, and **every** subsequent `atl invoice generate` for that company exits 1 with no CLI route back. The clamp degrades that into "credit is treated as zero", which is recoverable.
+
+The row written back records `kind='hourly'`, `credit_applied_cents=applied`, `discount_cents=goodwill`, `total_cents=due`.
+
+**Read the balance on `qtx`, or before `BeginTx`.** The insertion point sits inside the open transaction, and the daemon runs `db.SetMaxOpenConns(1)` — a `s.Q.CompanyCreditBalance(...)` there blocks on the single connection held by the transaction until the 10s handler deadline, surfacing as `context deadline exceeded`, which the CLI then retries three times. Indistinguishable from the known `accessibility_denied` stall, and invisible to any test that doesn't hold a transaction.
+
+Worked example, 14,623.00 credit, no goodwill:
 
 | Invoice | Hours | Line total | Applied | Due | Credit after |
 |---|---:|---:|---:|---:|---:|
@@ -73,76 +101,116 @@ Worked example, 14,623.00 credit:
 | ES-0009 | 400.00 h | 20,000.00 | 8,623.00 | **11,377.00** | 0.00 |
 | ES-0010 | 200.00 h | 10,000.00 | 0.00 | **10,000.00** | 0.00 |
 
-It self-terminates — there is no "until repaid" condition to implement.
-
 ### Flags
 
 | Flag | Behavior |
 |---|---|
 | *(none)* | Auto-applies the credit. The default, so it cannot be forgotten. |
-| `--no-credit` | Bills the full hours and ignores the credit. Escape hatch for a month to be charged in full. |
-| `--discount=N` | **Error** when credit > 0, naming the remaining balance. A manual goodwill discount and a drawdown would be indistinguishable in `discount_cents`; refusing the ambiguity is cheaper than a `discount_kind` column. Combine with `--no-credit` to force a manual discount. |
+| `--no-credit` | Bills the full hours and ignores the credit. New flag; needs a field on `rpcapi.InvoiceGenerateArgs`. |
+| `--discount=N` | Manual goodwill reduction. **No longer conflicts with a live credit** — the two are separate columns and separate PDF rows. |
 | `--dry-run` | Prints the drawdown and resulting balance; writes nothing. |
 
-### PDF label
+### PDF
 
-`InvoiceDoc` gains `DiscountLabel string` (default `"Discount"`, set to `"Advance applied"` when the discount came from a drawdown). `pdf.go` line ~153 renders that field instead of the literal `"Discount"`. Zero-value behaviour is unchanged, so existing callers and tests keep passing.
+`InvoiceDoc` gains `CreditAppliedCents int64` and `CreditAppliedRef string`; `AmountDueCents()` becomes `LineItem.TotalCents − DiscountCents − CreditAppliedCents`, and `BuildDoc` validates the sum against the line total. The renderer emits up to two reduction rows:
 
-### Anchor semantics
+```
+Subtotal                                    6,000.00 CAD
+Advance applied (ES-0007)                  -6,000.00 CAD
+Discount                                       -0.00 CAD   (omitted when zero)
+Amount Due                                      0.00 CAD
+```
 
-Unchanged and deliberately split:
+Naming the advance's invoice number is what lets the client's bookkeeper tie the two documents together — a different thing from the running balance this design deliberately excludes. `CreditAppliedRef` is the **oldest advance with credit remaining** at generate time (FIFO), so it is deterministic without tracking per-advance allocation.
 
-- **Hourly invoices** close a billing period and move the anchor (`sent_at = now`), as today.
-- **Advances** close no period and must not move it. `ES-0007` established this by hand: its `sent_at` is pinned to `ES-0006`'s (`1785766121`), so `LastInvoiceSentForCompany` — which is `MAX(sent_at)` — is unaffected and no tracked hours are silently dropped. Any future advance must do the same.
+`DiscountLabel` is *not* how this is done. An earlier draft proposed one, defaulting to `"Discount"` — but Go's zero value for a string is `""`, so every existing caller would have rendered a blank label. Separate fields avoid the trap entirely. Note that `pdf_test.go`'s `sampleDoc` has a zero discount, so the reduction rows are currently never text-asserted; the new tests must assert them.
+
+### Anchor semantics — now structural
+
+`LastInvoiceSentForCompany` (`queries.sql`) gains one clause:
+
+```sql
+WHERE company_id = ? AND kind <> 'advance'
+ORDER BY sent_at DESC LIMIT 1
+```
+
+Today `ES-0007` is anchor-neutral only because its `sent_at` was hand-pinned to `ES-0006`'s. That is prose, not code: a future advance stamped with `now` would move the anchor and silently drop every hour since the last real invoice — the exact failure `CLAUDE.md` warns about for the menu's "Send invoice". With the filter, neutrality is a property of the query, and new advances can carry their true issue time.
+
+`ES-0007`'s pinned timestamp stays as-is (harmless once the filter ships, and re-stamping it is a data edit with no upside).
+
+## Creating an advance
+
+Both surfaces, sharing one RPC (`InvoiceAdvance`):
+
+**CLI:** `atl invoice advance <company> --amount=14623 [--note=...] [--issue-date=YYYY-MM-DD] [--dry-run]`
+
+**Menu:** `atl` → Invoices → *Issue advance*, following the pattern established in `2026-07-01-menu-invoice-generation-design.md` — numbered company picker (no typing names), amount prompt, preview-and-confirm before the number is burned, then open the PDF and reveal it in Finder.
+
+Behavior: allocates the next number, renders with the hourly line shape (`amount ÷ rate` hours × rate, matching how `ES-0007` was produced), writes `kind='advance'`, `credit_applied_cents=0`, `total_cents=amount`, and **never auto-applies existing credit**.
+
+That last rule is not cosmetic. Without an advance command the operator would use `generate` plus a hand-edit — and `generate` auto-applies credit first, so a fresh 20,000 advance issued while 14,623 remained would be recorded as 5,377 gross and under-state the total credit by exactly the old balance. This is why the command moved from non-goal to goal.
+
+Rejects: a non-positive amount, an amount that isn't a whole number of cents, a company whose `billing_mode` is `none`, and a company with no `billed_from` sender.
 
 ## Reading the balance
 
-A new read-only `atl invoice balance <company>` (RPC + CLI):
+`atl invoice balance <company>` (RPC + CLI, read-only):
 
 ```
 BClouder
   Advance issued              14,623.00 CAD   ES-0007
   Applied so far               6,000.00 CAD   ES-0008
   ───────────────────────────────────────────────────
-  Remaining credit             8,623.00 CAD   = 172.46 h @ 50.00/h
+  Remaining credit             8,623.00 CAD   ≈ 172.46 h @ 50.00/h
   Tracked since anchor           120.00 h     (6,000.00 CAD)
 ```
 
-The per-invoice lines (which advance, which invoices consumed it) are **not** derivable from `CompanyCreditBalance`, which returns a single total. The command needs a second query alongside it — `CompanyCreditRows`: the company's rows where `kind='advance' OR discount_cents > 0`, returning `number`, `kind`, `total_cents`, `discount_cents`, ordered by `sent_at`. The aggregate stays the authority for the remaining figure; the rows are presentation.
+Hours-to-break-even is shown as approximate (`≈`): at 50.00/h every line total is a multiple of 50 cents so it is exact today, but that does not hold for an arbitrary rate.
 
-`atl invoice list` additionally marks advance rows (`ADV`) and shows `discount_cents`, so a drawdown is visible without a second command.
+`atl invoice list` also marks advance rows (`ADV`) and shows the applied amount. **This is not a display-only tweak** — `ListInvoicesByCompany` and `ListAllInvoices` currently select only `id, company_name, sent_at, note`, and `rpcapi`'s list item carries no number or totals. It means two queries changed, `rpcapi` fields added, `make sqlc`, and the CLI printer reworked.
+
+## Guards
+
+- **`InvoiceDelete` refuses rows with `kind='advance'` or `credit_applied_cents > 0`** unless `--force`, and prints the orphaned PDF path. Deleting a drawdown invoice returns credit the client already saw applied on a PDF they hold; the tool would then spend that 6,000 twice. The row is deleted but the PDF stays on disk and the number is never reclaimed, so this is a correction that must be deliberate.
+- **`atl company delete` refuses a company that has invoices** unless `--force`. `ON DELETE CASCADE` plus `foreign_keys(1)` means one unconfirmed command currently vaporises the advance along with the history.
+- **Render the PDF to a temp file in the sender directory and `os.Rename` after `tx.Commit()`.** Today it is written to its final path before the insert; a crash or deadline between the two rolls back the row (the derived balance stays correct) but leaves a complete, numbered PDF on disk. Emailed by accident, the client holds an invoice the tool has no record of — and `invoiceGenerateRPC` retries three times on `context deadline exceeded`, so a lost reply after a successful commit can allocate a second number and consume the credit twice.
 
 ## Edge cases
 
-All fall out of `min()` and the derived query; none needs special-casing:
-
-- **Credit exceeds the month** → due 0.00, remainder carries.
-- **Credit smaller than the month** → due is the excess, credit lands exactly on 0.
-- **Zero tracked hours** → line 0.00, applied 0.00, nothing consumed; `--allow-empty` still required, unchanged.
-- **Several advances** → they sum.
-- **Invoice deleted** → deleting the advance removes the credit; deleting a drawdown returns it. Both correct with no compensating logic.
-- **Balance can never go negative** — `applied ≤ credit` and `applied ≤ line_total`.
+- **Credit exceeds the month** → due 0.00, remainder carries. **Credit smaller** → due is the excess, credit lands exactly on 0.
+- **Zero tracked hours** → line 0.00, nothing consumed; `--allow-empty` still required.
+- **Several advances** → they sum, and each carries `credit_applied_cents=0` by construction.
+- **Rounding** → at 50.00/h every line total is a multiple of 50 cents and the advance is too, so the credit hits 0 dead-on. More generally, integer-cent `min()` means a residue is never *stuck*: any later invoice of ≥ 1 cent consumes it.
+- **Deleting the advance before any drawdown** → credit returns to 0, correct with no compensating logic.
+- **No cross-company leak** — `company_id` is the only key, `companies.name` is UNIQUE, and rowid reuse is unreachable under `ON DELETE CASCADE`.
 
 ## Testing
 
 Table-driven, matching existing style:
 
-- `internal/invoice` — drawdown arithmetic and the `DiscountLabel` switch. Pure, no DB.
-- `internal/store` — `CompanyCreditBalance` over: advance only, advance + partial drawdown, exhausted credit, several advances, deleted advance.
-- `internal/daemon` — `generate` applies the credit and writes back the correct `discount_cents`/`total_cents`; `--discount` with a live credit errors; `--no-credit` bills full; `--dry-run` writes nothing.
-- `internal/cli` — `invoice balance` output formatting, including the zero-credit case.
+- `internal/invoice` — the `max(0, min(credit, line_total − goodwill))` arithmetic including the negative-credit clamp; `AmountDueCents()` with both reductions; `BuildDoc` rejecting `goodwill + applied > line_total`. Pure, no DB.
+- `internal/store` — `CompanyCreditBalance` over: advance only, partial drawdown, exhausted credit, several advances, deleted advance, a goodwill discount (must **not** move the balance), and a currency mismatch (must be excluded).
+- `internal/daemon` — `generate` applies credit and writes back the right three columns; `--no-credit` bills full; `--dry-run` writes nothing; `InvoiceAdvance` never auto-applies; `InvoiceDelete` refuses a drawdown row without `--force`; the balance read does not deadlock inside the transaction.
+- `internal/cli` — `invoice balance` formatting including zero credit; the menu advance flow's preview-and-confirm.
+- `internal/invoice/pdf_test.go` — assert both reduction rows render with the advance number, since the current `sampleDoc` never exercises them.
 
-## Manual step
+## Manual steps
 
-Backfill the one existing advance, with a DB backup first (per the convention in `docs/billing-runbook.md` and prior manual edits):
+Ordering matters: the migration alone leaves the balance at **0**, because `ES-0007` defaults to `kind='hourly'`.
 
 ```sh
 cd ~/.antitimely
 sqlite3 db.sqlite ".backup 'db.sqlite.backup-pre-kind-backfill-20260803'"
 sqlite3 db.sqlite "UPDATE invoices SET kind='advance' WHERE id=7;"
-sqlite3 db.sqlite "SELECT id, number, kind FROM invoices WHERE company_id=3;"   # verify
+sqlite3 db.sqlite "SELECT id, number, kind, total_cents, credit_applied_cents FROM invoices WHERE company_id=3;"
 ```
 
-Deliberately not in `invoiceMigrations`: a code migration naming a specific invoice id would be wrong for any other database.
+Deliberately not in `invoiceMigrations`: a code migration naming a specific invoice id would be wrong for any other database. No `SIGHUP` is needed — invoices are read per-call from the DB and are not part of the rule/allowlist cache.
 
-Then `kill -HUP` is **not** required — invoices are read straight from the DB and are not part of the rule/allowlist cache.
+## Billing-runbook corrections (independent of the code)
+
+`ES-0006` and `ES-0007` share `sent_at` exactly, which **already breaks** `docs/billing-runbook.md`:
+
+- **Step 2** derives the period from the two most recent `sent_at` values → START == END → the next timesheet computes **0 h**. Add `AND kind='hourly'` (or `AND number IS NOT NULL` before the column exists).
+- **Step 3** reconciles `deduped hours × 50` against the invoice total; once a drawdown lands, the total is net. Compare against the **Subtotal**.
+- **Step 6**'s final check ("timesheet total ≥ invoice total") needs the same rewording.
