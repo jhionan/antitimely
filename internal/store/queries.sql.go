@@ -452,21 +452,25 @@ func (q *Queries) IgnoreObservation(ctx context.Context, arg IgnoreObservationPa
 const insertInvoiceFull = `-- name: InsertInvoiceFull :one
 INSERT INTO invoices (
     company_id, sent_at, note, created_at,
-    number, pdf_path, total_cents, currency, sender_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    number, pdf_path, total_cents, currency, sender_key,
+    kind, credit_applied_cents, discount_cents
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
 type InsertInvoiceFullParams struct {
-	CompanyID  int64
-	SentAt     int64
-	Note       string
-	CreatedAt  int64
-	Number     sql.NullString
-	PdfPath    sql.NullString
-	TotalCents sql.NullInt64
-	Currency   sql.NullString
-	SenderKey  sql.NullString
+	CompanyID          int64
+	SentAt             int64
+	Note               string
+	CreatedAt          int64
+	Number             sql.NullString
+	PdfPath            sql.NullString
+	TotalCents         sql.NullInt64
+	Currency           sql.NullString
+	SenderKey          sql.NullString
+	Kind               string
+	CreditAppliedCents int64
+	DiscountCents      int64
 }
 
 func (q *Queries) InsertInvoiceFull(ctx context.Context, arg InsertInvoiceFullParams) (int64, error) {
@@ -480,6 +484,9 @@ func (q *Queries) InsertInvoiceFull(ctx context.Context, arg InsertInvoiceFullPa
 		arg.TotalCents,
 		arg.Currency,
 		arg.SenderKey,
+		arg.Kind,
+		arg.CreditAppliedCents,
+		arg.DiscountCents,
 	)
 	var id int64
 	err := row.Scan(&id)

@@ -157,6 +157,7 @@ func invoiceGenerate(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "Render PDF to a temp file without DB writes")
 	allowEmpty := fs.Bool("allow-empty", false, "For hourly mode, allow 0-tick periods")
 	discount := fs.String("discount", "", "Flat discount in the company's currency, e.g. 50 or 50.00")
+	noCredit := fs.Bool("no-credit", false, "Do not apply any outstanding advance credit")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 64
@@ -167,7 +168,7 @@ func invoiceGenerate(args []string) int {
 		return 64
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--discount=AMOUNT] [--dry-run] [--allow-empty]")
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--discount=AMOUNT] [--no-credit] [--dry-run] [--allow-empty]")
 		return 64
 	}
 	company := fs.Arg(0)
@@ -196,6 +197,7 @@ func invoiceGenerate(args []string) int {
 		DryRun:        *dryRun,
 		AllowEmpty:    *allowEmpty,
 		DiscountCents: discountCents,
+		NoCredit:      *noCredit,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -206,6 +208,11 @@ func invoiceGenerate(args []string) int {
 		tag = " (dry-run)"
 	}
 	fmt.Printf("Generated %s%s — %s\n", reply.Number, tag, reply.PDFPath)
+	if reply.CreditAppliedCents > 0 {
+		fmt.Printf("Advance applied: %s (remaining %s)\n",
+			invoice.FormatMoney(reply.CreditAppliedCents, reply.Currency),
+			invoice.FormatMoney(reply.CreditRemainingCents, reply.Currency))
+	}
 	openAndReveal(reply.PDFPath)
 	return 0
 }

@@ -109,6 +109,35 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		}
 	}
 
+	// Read the credit balance BEFORE BeginTx: the DB is SetMaxOpenConns(1),
+	// so a s.Q query issued once the transaction holds that single
+	// connection deadlocks until the handler's context deadline.
+	var creditRemaining int64
+	var creditRef string
+	if !args.NoCredit {
+		creditRemaining, err = s.Q.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
+			CompanyID: co.ID,
+			Currency:  co.Currency,
+		})
+		if err != nil {
+			return fmt.Errorf("read credit balance: %w", err)
+		}
+		rows, err := s.Q.CompanyCreditRows(ctx, store.CompanyCreditRowsParams{
+			CompanyID: co.ID,
+			Currency:  co.Currency,
+		})
+		if err != nil {
+			return fmt.Errorf("read credit rows: %w", err)
+		}
+		// FIFO: the oldest advance is the one we name on the document.
+		for i := len(rows) - 1; i >= 0; i-- {
+			if rows[i].Kind == "advance" && rows[i].Number.Valid {
+				creditRef = rows[i].Number.String
+				break
+			}
+		}
+	}
+
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -141,6 +170,12 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 
 	number := invoice.FormatInvoiceNumber(sender.Invoice.NumberPrefix, sender.Invoice.NumberPad, allocatedNumber)
 
+	lineTotal := invoice.ComputeLineItem(co.BillingMode, ticks, s.TickIntervalSeconds, co.RateCents.Int64).TotalCents
+	applied := invoice.ApplyCredit(creditRemaining, lineTotal, args.DiscountCents)
+	if applied == 0 {
+		creditRef = ""
+	}
+
 	doc, err := invoice.BuildDoc(invoice.BuildDocInput{
 		Now:           now,
 		ClientName:    co.Name,
@@ -158,6 +193,9 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		Ticks:         ticks,
 		TickSec:       s.TickIntervalSeconds,
 		DiscountCents: args.DiscountCents,
+
+		CreditAppliedCents: applied,
+		CreditAppliedRef:   creditRef,
 	})
 	if err != nil {
 		return err
@@ -209,6 +247,10 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 			TotalCents: sql.NullInt64{Int64: doc.AmountDueCents(), Valid: true},
 			Currency:   sql.NullString{String: co.Currency.String, Valid: true},
 			SenderKey:  sql.NullString{String: senderKey, Valid: true},
+
+			Kind:               "hourly",
+			CreditAppliedCents: applied,
+			DiscountCents:      args.DiscountCents,
 		})
 		if err != nil {
 			_ = os.Remove(pdfPath)
@@ -235,5 +277,7 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	reply.ToUnix = to.Unix()
 	reply.Ticks = ticks
 	reply.BillingMode = co.BillingMode
+	reply.CreditAppliedCents = applied
+	reply.CreditRemainingCents = creditRemaining - applied
 	return nil
 }

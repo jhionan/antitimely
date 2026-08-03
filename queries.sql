@@ -255,8 +255,9 @@ RETURNING next_invoice_number - 1 AS allocated;
 -- name: InsertInvoiceFull :one
 INSERT INTO invoices (
     company_id, sent_at, note, created_at,
-    number, pdf_path, total_cents, currency, sender_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    number, pdf_path, total_cents, currency, sender_key,
+    kind, credit_applied_cents, discount_cents
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: MaxTickTs :one

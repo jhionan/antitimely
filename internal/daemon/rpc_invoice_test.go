@@ -3,10 +3,12 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"net/rpc"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ledongthuc/pdf"
 
@@ -30,6 +32,32 @@ senders:
         title: "Wise EUR"
         fields:
           - { label: "IBAN", value: "BE16" }
+
+invoice:
+  output_dir: "%s"
+  line_item_label: "Software development"
+  due_days: 0
+`
+
+// senderYAMLForRPCHourly numbers from ES-0008 (continuing the fixture's
+// ES-0007 advance) and offers a CAD bank account, matching the hourly
+// credit-drawdown tests' company currency.
+const senderYAMLForRPCHourly = `
+senders:
+  br:
+    legal_name: "JHIONAN RIAN LARA DOS SANTOS"
+    tax_id: "34.012.215/0001-44"
+    tax_id_label: "CNPJ"
+    address_lines: ["Mateus Leme 2830", "Brazil"]
+    invoice:
+      number_prefix: "ES-"
+      number_pad: 4
+      next_number: 8
+    bank_accounts:
+      CAD:
+        title: "Wise CAD"
+        fields:
+          - { label: "Account", value: "1234567" }
 
 invoice:
   output_dir: "%s"
@@ -262,5 +290,144 @@ func TestLastInvoiceSentForCompany_IgnoresAdvances(t *testing.T) {
 	}
 	if got != 1000 {
 		t.Errorf("anchor = %d, want 1000 (the advance at 5000 must not move it)", got)
+	}
+}
+
+// seedHourlyCompanyWithTicks creates company "BClouder" billed hourly at
+// 50.00 CAD/hr from sender "br", backdates its created_at far enough into
+// the past that hours*3600 seconds worth of 5s-grid ticks land safely
+// before "now" (the upper bound of the default hourly period), and writes
+// the sender config used by InvoiceGenerate.
+func seedHourlyCompanyWithTicks(t *testing.T, client *rpc.Client, db *sql.DB, hours float64) {
+	t.Helper()
+
+	var add rpcapi.CompanyAddReply
+	if err := client.Call(rpcapi.ServiceName+".CompanyAdd",
+		rpcapi.CompanyAddArgs{Name: "BClouder"}, &add); err != nil {
+		t.Fatal(err)
+	}
+	q := store.New(db)
+	ctx := context.Background()
+	if err := q.SetCompanyBilling(ctx, store.SetCompanyBillingParams{
+		BillingMode: "hourly",
+		Currency:    sql.NullString{String: "CAD", Valid: true},
+		RateCents:   sql.NullInt64{Int64: 5000, Valid: true},
+		BilledFrom:  sql.NullString{String: "br", Valid: true},
+		Name:        "BClouder",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	createdAt := time.Now().Add(-200 * time.Hour).Unix()
+	if _, err := db.Exec(`UPDATE companies SET created_at = ? WHERE id = ?`, createdAt, add.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	projRes, err := db.Exec(
+		`INSERT INTO projects (name, company_id, paused, created_at) VALUES ('BClouder-work', ?, 0, ?)`,
+		add.ID, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, err := projRes.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	obsRes, err := db.Exec(
+		`INSERT INTO observations (source, binary_name, first_seen) VALUES ('agent', 'claude', ?)`,
+		createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obsID, err := obsRes.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticks := int64(hours * 720) // hours*3600s / 5s-grid
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO ticks (ts, observation_id, project_id) VALUES (?, ?, ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := int64(0); i < ticks; i++ {
+		if _, err := stmt.Exec(createdAt+5+i*5, obsID, projectID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	body := strings.Replace(senderYAMLForRPCHourly, "%s", outDir, 1)
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANTITIMELY_CONFIG", cfgPath)
+}
+
+func TestRPC_InvoiceGenerate_AppliesAdvanceCredit(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 120.0) // 120 h at 50.00/h = 6,000.00
+
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind)
+		SELECT id, 1, 1, 'ES-0007', 1462300, 'CAD', 'advance' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceGenerateReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceGenerate",
+		rpcapi.InvoiceGenerateArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+
+	if reply.CreditAppliedCents != 600000 {
+		t.Errorf("CreditAppliedCents = %d, want 600000", reply.CreditAppliedCents)
+	}
+	if reply.CreditRemainingCents != 862300 {
+		t.Errorf("CreditRemainingCents = %d, want 862300", reply.CreditRemainingCents)
+	}
+
+	var total, applied int64
+	var kind string
+	if err := db.QueryRow(
+		`SELECT total_cents, credit_applied_cents, kind FROM invoices WHERE number='ES-0008'`,
+	).Scan(&total, &applied, &kind); err != nil {
+		t.Fatal(err)
+	}
+	if total != 0 || applied != 600000 || kind != "hourly" {
+		t.Errorf("row = (total %d, applied %d, kind %q), want (0, 600000, hourly)", total, applied, kind)
+	}
+}
+
+func TestRPC_InvoiceGenerate_NoCreditBillsFull(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 120.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind)
+		SELECT id, 1, 1, 'ES-0007', 1462300, 'CAD', 'advance' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceGenerateReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceGenerate",
+		rpcapi.InvoiceGenerateArgs{CompanyName: "BClouder", NoCredit: true}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.CreditAppliedCents != 0 {
+		t.Errorf("CreditAppliedCents = %d, want 0 with --no-credit", reply.CreditAppliedCents)
+	}
+	if reply.TotalCents != 600000 {
+		t.Errorf("TotalCents = %d, want 600000", reply.TotalCents)
 	}
 }

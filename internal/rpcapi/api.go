@@ -92,6 +92,7 @@ type InvoiceGenerateArgs struct {
 	DryRun        bool
 	AllowEmpty    bool
 	DiscountCents int64 // flat discount in the company's currency; 0 = none
+	NoCredit      bool  // skip automatic advance-credit drawdown
 }
 
 type InvoiceGenerateReply struct {
@@ -107,6 +108,9 @@ type InvoiceGenerateReply struct {
 	ToUnix        int64  // resolved billing-period end (exclusive)
 	Ticks         int64  // billed tick count (0 for monthly_fixed)
 	BillingMode   string // "hourly" | "monthly_fixed"
+
+	CreditAppliedCents   int64 // advance credit consumed by this invoice
+	CreditRemainingCents int64 // remaining balance after this invoice
 }
 
 // --- Allowlist ---
