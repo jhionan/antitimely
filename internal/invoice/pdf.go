@@ -136,9 +136,10 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 	)
 	m.AddRows(row.New(4)) // spacer
 
-	// Totals block — right-aligned. With a discount we surface the gross
-	// subtotal and the reduction explicitly so the net "Amount Due" is
-	// auditable; without one we keep the original 4-line layout unchanged.
+	// Totals block — right-aligned. With a discount and/or a credit drawdown
+	// we surface the gross subtotal and each reduction explicitly (Advance
+	// applied before Discount) so the net "Amount Due" is auditable; with
+	// neither we keep the original 4-line layout unchanged.
 	type totalLine struct {
 		Label string
 		Value string
@@ -147,9 +148,22 @@ func RenderPDF(doc InvoiceDoc, outPath string) error {
 	amountDue := FormatMoney(doc.AmountDueCents(), doc.Currency)
 	zero := FormatMoney(0, doc.Currency)
 	var totalLines []totalLine
-	if doc.DiscountCents > 0 {
+	if doc.DiscountCents > 0 || doc.CreditAppliedCents > 0 {
 		totalLines = append(totalLines,
 			totalLine{"Subtotal", FormatMoney(doc.LineItem.TotalCents, doc.Currency), false},
+		)
+	}
+	if doc.CreditAppliedCents > 0 {
+		label := "Advance applied"
+		if doc.CreditAppliedRef != "" {
+			label = "Advance applied (" + doc.CreditAppliedRef + ")"
+		}
+		totalLines = append(totalLines,
+			totalLine{label, "-" + FormatMoney(doc.CreditAppliedCents, doc.Currency), false},
+		)
+	}
+	if doc.DiscountCents > 0 {
+		totalLines = append(totalLines,
 			totalLine{"Discount", "-" + FormatMoney(doc.DiscountCents, doc.Currency), false},
 		)
 	}

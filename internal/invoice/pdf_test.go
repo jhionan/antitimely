@@ -148,6 +148,94 @@ func TestRenderPDF_TotalsBlock(t *testing.T) {
 	}
 }
 
+func TestRenderPDF_CreditAppliedRow(t *testing.T) {
+	doc := sampleDoc()
+	doc.LineItem = LineItem{QuantityHoursTimes100: 12000, UnitCents: 5000, TotalCents: 600000}
+	doc.DiscountCents = 0
+	doc.CreditAppliedCents = 600000
+	doc.CreditAppliedRef = "ES-0007"
+
+	out := filepath.Join(t.TempDir(), "credit.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatalf("RenderPDF: %v", err)
+	}
+	text := extractPDFText(t, out)
+
+	if !strings.Contains(text, "Advance applied (ES-0007)") {
+		t.Errorf("expected the advance row naming ES-0007; got:\n%s", text)
+	}
+	if strings.Contains(text, "Discount") {
+		t.Errorf("Discount row must be omitted when zero; got:\n%s", text)
+	}
+	// sampleDoc's Currency is EUR, not the brief's illustrative CAD.
+	if !strings.Contains(text, "0.00 EUR") {
+		t.Errorf("expected an Amount Due of 0.00 EUR; got:\n%s", text)
+	}
+}
+
+func TestRenderPDF_CreditAppliedNoRef_FallsBackToBareLabel(t *testing.T) {
+	doc := sampleDoc()
+	doc.LineItem = LineItem{QuantityHoursTimes100: 12000, UnitCents: 5000, TotalCents: 600000}
+	doc.CreditAppliedCents = 200000
+	doc.CreditAppliedRef = ""
+
+	out := filepath.Join(t.TempDir(), "credit-noref.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatalf("RenderPDF: %v", err)
+	}
+	text := extractPDFText(t, out)
+
+	if !strings.Contains(text, "Advance applied") {
+		t.Errorf("expected the bare Advance applied row; got:\n%s", text)
+	}
+	if strings.Contains(text, "Advance applied (") {
+		t.Errorf("expected no ref parenthetical when CreditAppliedRef is empty; got:\n%s", text)
+	}
+}
+
+func TestRenderPDF_DiscountAndCredit_SubtotalRenderedOnce(t *testing.T) {
+	doc := sampleDoc()
+	doc.LineItem = LineItem{QuantityHoursTimes100: 12000, UnitCents: 5000, TotalCents: 600000}
+	doc.DiscountCents = 50000
+	doc.CreditAppliedCents = 100000
+	doc.CreditAppliedRef = "ES-0007"
+
+	out := filepath.Join(t.TempDir(), "credit-and-discount.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatalf("RenderPDF: %v", err)
+	}
+	text := extractPDFText(t, out)
+
+	if got := strings.Count(text, "Subtotal"); got != 1 {
+		t.Errorf("expected exactly one Subtotal row, got %d; text:\n%s", got, text)
+	}
+	if !strings.Contains(text, "Discount") {
+		t.Errorf("expected the Discount row; got:\n%s", text)
+	}
+	if !strings.Contains(text, "Advance applied (ES-0007)") {
+		t.Errorf("expected the advance row naming ES-0007; got:\n%s", text)
+	}
+	// 600000 - 50000 - 100000 = 450000
+	if !strings.Contains(text, "4,500.00 EUR") {
+		t.Errorf("expected an Amount Due of 4,500.00 EUR; got:\n%s", text)
+	}
+}
+
+func TestRenderPDF_NoDiscountNoCredit_NoReductionRows(t *testing.T) {
+	doc := sampleDoc()
+	out := filepath.Join(t.TempDir(), "plain.pdf")
+	if err := RenderPDF(doc, out); err != nil {
+		t.Fatalf("RenderPDF: %v", err)
+	}
+	text := extractPDFText(t, out)
+
+	for _, unwanted := range []string{"Subtotal", "Discount", "Advance applied"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("did not expect %q in the zero-reduction case; got:\n%s", unwanted, text)
+		}
+	}
+}
+
 func TestRenderPDF_BankBlock(t *testing.T) {
 	doc := sampleDoc()
 	dir := t.TempDir()
