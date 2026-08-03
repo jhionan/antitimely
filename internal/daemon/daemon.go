@@ -67,6 +67,16 @@ func DefaultConfig() (Config, error) {
 // abandoned client cannot pin a goroutine + DB connection forever.
 const rpcConnDeadline = 30 * time.Second
 
+// invoiceCreditMigrations adds the advance-credit columns. The CHECK must ship
+// in the same statement as the column: the loop below tolerates "duplicate
+// column", so a later attempt to add the constraint silently no-ops and the
+// only remaining route is a full table rebuild.
+var invoiceCreditMigrations = []string{
+	"ALTER TABLE invoices ADD COLUMN kind TEXT NOT NULL DEFAULT 'hourly' CHECK (kind IN ('hourly','advance'))",
+	"ALTER TABLE invoices ADD COLUMN credit_applied_cents INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE invoices ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0",
+}
+
 // Run boots the daemon and blocks until SIGINT/SIGTERM.
 func Run(cfg Config, schemaSQL string) error {
 	if schemaSQL == "" {
@@ -104,7 +114,7 @@ func Run(cfg Config, schemaSQL string) error {
 		"ALTER TABLE invoices ADD COLUMN currency TEXT",
 		"ALTER TABLE invoices ADD COLUMN sender_key TEXT",
 	}
-	for _, q := range invoiceMigrations {
+	for _, q := range append(invoiceMigrations, invoiceCreditMigrations...) {
 		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate %q: %w", q, err)
 		}

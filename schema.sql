@@ -84,7 +84,11 @@ CREATE TABLE IF NOT EXISTS invoices (
     pdf_path     TEXT,
     total_cents  INTEGER,
     currency     TEXT,
-    sender_key   TEXT
+    sender_key   TEXT,
+    kind                  TEXT NOT NULL DEFAULT 'hourly'
+                            CHECK (kind IN ('hourly','advance')),
+    credit_applied_cents  INTEGER NOT NULL DEFAULT 0,
+    discount_cents        INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_invoices_company_sent ON invoices(company_id, sent_at DESC);
 
