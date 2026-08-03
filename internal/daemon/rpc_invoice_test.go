@@ -209,3 +209,58 @@ func TestRPC_InvoiceGenerate_DryRun(t *testing.T) {
 		t.Errorf("dry-run PDF missing at %s", reply.PDFPath)
 	}
 }
+
+func TestCompanyCreditBalance(t *testing.T) {
+	_, db, _ := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+
+	if _, err := db.Exec(`INSERT INTO companies (id, name, created_at) VALUES (3, 'BClouder', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	// Advance of 14,623.00; a drawdown of 6,000.00; a goodwill discount of 500.00
+	// that must NOT move the balance; and a EUR row that must be excluded.
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents, discount_cents) VALUES
+		 (3, 100, 100, 'ES-0007', 1462300, 'CAD', 'advance', 0, 0),
+		 (3, 200, 200, 'ES-0008',       0, 'CAD', 'hourly', 600000, 0),
+		 (3, 300, 300, 'ES-0009',  950000, 'CAD', 'hourly',      0, 50000),
+		 (3, 400, 400, 'ES-0010',  100000, 'EUR', 'advance',     0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := q.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
+		CompanyID: 3,
+		Currency:  sql.NullString{String: "CAD", Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 862300 { // 1462300 - 600000; goodwill and the EUR advance excluded
+		t.Errorf("CompanyCreditBalance = %d, want 862300", got)
+	}
+}
+
+func TestLastInvoiceSentForCompany_IgnoresAdvances(t *testing.T) {
+	_, db, _ := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+
+	if _, err := db.Exec(`INSERT INTO companies (id, name, created_at) VALUES (3, 'BClouder', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind) VALUES
+		 (3, 1000, 1000, 'ES-0006', 537700, 'CAD', 'hourly'),
+		 (3, 5000, 5000, 'ES-0007', 1462300, 'CAD', 'advance')`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := q.LastInvoiceSentForCompany(ctx, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1000 {
+		t.Errorf("anchor = %d, want 1000 (the advance at 5000 must not move it)", got)
+	}
+}

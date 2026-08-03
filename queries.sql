@@ -211,7 +211,29 @@ SET billing_mode = ?, currency = ?, rate_cents = ?, billed_from = ?
 WHERE name = ?;
 
 -- name: LastInvoiceSentForCompany :one
-SELECT sent_at FROM invoices WHERE company_id = ? ORDER BY sent_at DESC LIMIT 1;
+-- Advance invoices close no billing period, so they must not move the
+-- anchor: an hour worked between the last real invoice and an advance
+-- would otherwise be silently dropped from every future invoice.
+SELECT sent_at FROM invoices
+WHERE company_id = ? AND kind <> 'advance'
+ORDER BY sent_at DESC, id DESC LIMIT 1;
+
+-- name: CompanyCreditBalance :one
+-- Remaining prepaid credit for a company in one currency: total advanced
+-- minus total drawn down. discount_cents (goodwill) never enters this sum.
+SELECT COALESCE(SUM(CASE WHEN kind = 'advance' THEN total_cents ELSE 0 END), 0)
+     - COALESCE(SUM(credit_applied_cents), 0) AS remaining_cents
+FROM invoices
+WHERE company_id = ? AND currency = ?;
+
+-- name: CompanyCreditRows :many
+-- Rows that make up a company's credit ledger in one currency: advances
+-- (credits) and any invoice that drew down credit (debits).
+SELECT number, kind, total_cents, credit_applied_cents, sent_at
+FROM invoices
+WHERE company_id = ? AND currency = ?
+  AND (kind = 'advance' OR credit_applied_cents > 0)
+ORDER BY sent_at DESC, id DESC;
 
 -- name: CountTicksForCompanyInRange :one
 -- COUNT(DISTINCT ts) so a second worked across multiple projects of the same

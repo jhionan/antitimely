@@ -191,6 +191,79 @@ func (q *Queries) AssignedDistinctTicksInRange(ctx context.Context, arg Assigned
 	return tick_count, err
 }
 
+const companyCreditBalance = `-- name: CompanyCreditBalance :one
+SELECT COALESCE(SUM(CASE WHEN kind = 'advance' THEN total_cents ELSE 0 END), 0)
+     - COALESCE(SUM(credit_applied_cents), 0) AS remaining_cents
+FROM invoices
+WHERE company_id = ? AND currency = ?
+`
+
+type CompanyCreditBalanceParams struct {
+	CompanyID int64
+	Currency  sql.NullString
+}
+
+// Remaining prepaid credit for a company in one currency: total advanced
+// minus total drawn down. discount_cents (goodwill) never enters this sum.
+func (q *Queries) CompanyCreditBalance(ctx context.Context, arg CompanyCreditBalanceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, companyCreditBalance, arg.CompanyID, arg.Currency)
+	var remaining_cents int64
+	err := row.Scan(&remaining_cents)
+	return remaining_cents, err
+}
+
+const companyCreditRows = `-- name: CompanyCreditRows :many
+SELECT number, kind, total_cents, credit_applied_cents, sent_at
+FROM invoices
+WHERE company_id = ? AND currency = ?
+  AND (kind = 'advance' OR credit_applied_cents > 0)
+ORDER BY sent_at DESC, id DESC
+`
+
+type CompanyCreditRowsParams struct {
+	CompanyID int64
+	Currency  sql.NullString
+}
+
+type CompanyCreditRowsRow struct {
+	Number             sql.NullString
+	Kind               string
+	TotalCents         sql.NullInt64
+	CreditAppliedCents int64
+	SentAt             int64
+}
+
+// Rows that make up a company's credit ledger in one currency: advances
+// (credits) and any invoice that drew down credit (debits).
+func (q *Queries) CompanyCreditRows(ctx context.Context, arg CompanyCreditRowsParams) ([]CompanyCreditRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, companyCreditRows, arg.CompanyID, arg.Currency)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CompanyCreditRowsRow{}
+	for rows.Next() {
+		var i CompanyCreditRowsRow
+		if err := rows.Scan(
+			&i.Number,
+			&i.Kind,
+			&i.TotalCents,
+			&i.CreditAppliedCents,
+			&i.SentAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countDistinctCompanyTicksSince = `-- name: CountDistinctCompanyTicksSince :one
 SELECT COUNT(DISTINCT t.ts) AS tick_count
 FROM ticks t
@@ -473,9 +546,14 @@ func (q *Queries) LastInvoicePerCompany(ctx context.Context) ([]LastInvoicePerCo
 }
 
 const lastInvoiceSentForCompany = `-- name: LastInvoiceSentForCompany :one
-SELECT sent_at FROM invoices WHERE company_id = ? ORDER BY sent_at DESC LIMIT 1
+SELECT sent_at FROM invoices
+WHERE company_id = ? AND kind <> 'advance'
+ORDER BY sent_at DESC, id DESC LIMIT 1
 `
 
+// Advance invoices close no billing period, so they must not move the
+// anchor: an hour worked between the last real invoice and an advance
+// would otherwise be silently dropped from every future invoice.
 func (q *Queries) LastInvoiceSentForCompany(ctx context.Context, companyID int64) (int64, error) {
 	row := q.db.QueryRowContext(ctx, lastInvoiceSentForCompany, companyID)
 	var sent_at int64

@@ -24,16 +24,19 @@ type IgnoredObservation struct {
 }
 
 type Invoice struct {
-	ID         int64
-	CompanyID  int64
-	SentAt     int64
-	Note       string
-	CreatedAt  int64
-	Number     sql.NullString
-	PdfPath    sql.NullString
-	TotalCents sql.NullInt64
-	Currency   sql.NullString
-	SenderKey  sql.NullString
+	ID                 int64
+	CompanyID          int64
+	SentAt             int64
+	Note               string
+	CreatedAt          int64
+	Number             sql.NullString
+	PdfPath            sql.NullString
+	TotalCents         sql.NullInt64
+	Currency           sql.NullString
+	SenderKey          sql.NullString
+	Kind               string
+	CreditAppliedCents int64
+	DiscountCents      int64
 }
 
 type Observation struct {
