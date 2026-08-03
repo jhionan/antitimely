@@ -35,10 +35,12 @@ atl invoice generate BClouder        # flags (if any) BEFORE the company name; n
 ```bash
 DB="file:$HOME/.antitimely/db.sqlite?mode=ro"
 # The two most recent BClouder anchors: the newest = END (this invoice), the one before = START.
-sqlite3 -readonly "$DB" "SELECT number, datetime(sent_at,'unixepoch','localtime') FROM invoices i JOIN companies c ON c.id=i.company_id WHERE c.name='BClouder' ORDER BY sent_at DESC LIMIT 3;"
+sqlite3 -readonly "$DB" "SELECT number, datetime(sent_at,'unixepoch','localtime') FROM invoices i JOIN companies c ON c.id=i.company_id WHERE c.name='BClouder' AND i.number IS NOT NULL AND i.kind='hourly' ORDER BY i.sent_at DESC, i.id DESC LIMIT 3;"
 START=$(date -d "<previous anchor, e.g. 2026-06-16 15:52:00>" +%s)
 END=$(date -d "<this invoice anchor, e.g. 2026-07-01 18:11:17>" +%s)
 ```
+
+⚠️ **Filter out advance invoices, or the period collapses.** An advance (`kind='advance'`, e.g. `ES-0007`) is anchor-neutral: its `sent_at` is deliberately pinned to the previous invoice's, so an unfiltered query returns the *same instant* twice — START == END — and the timesheet computes **0 h**. The `kind` column arrives with the credit-drawdown feature; until then use `AND i.number IS NOT NULL` alone and check by eye that the two timestamps differ. Design: `docs/superpowers/specs/2026-08-03-invoice-credit-drawdown-design.md`.
 
 BClouder project ids: **VCNA=5, Rumo=6, Daas=7** (verify: `SELECT id,name FROM projects p JOIN companies c ON c.id=p.company_id WHERE c.name='BClouder';`).
 
@@ -47,7 +49,7 @@ BClouder project ids: **VCNA=5, Rumo=6, Daas=7** (verify: `SELECT id,name FROM p
 ```bash
 sqlite3 -readonly "$DB" "SELECT printf('deduped: %.2f h -> CAD %.2f', COUNT(DISTINCT ts)*5.0/3600, COUNT(DISTINCT ts)*5.0/3600*50) FROM ticks WHERE project_id IN (5,6,7) AND ts>=$START AND ts<$END;"
 ```
-This should match the invoice total (rate is CAD 50.00/h; modulo banker's-rounding cents).
+This should match the invoice's **Subtotal** (rate is CAD 50.00/h; modulo banker's-rounding cents). Compare against the Subtotal, not the Amount Due: once an advance is being drawn down, `total_cents` and the printed total are *net* of the credit applied, so a correct invoice can show 0.00 due against many hours worked.
 
 ## Step 4 — Compute TIMESHEET hours (all hours, per day)
 
@@ -156,7 +158,7 @@ weasyprint timesheet.html "$HOME/Documents/Espanha/Autonomo/Invoices/BClouder-Ti
 (The Invoices folder is writable even though `ls` on it may report "Operation not permitted" — that's a macOS TCC quirk on directory metadata; file writes/reads by full path work.)
 
 ## Final check before sending
-- Timesheet total (all-hours) **≥** invoice total (deduped). If it's not, something's wrong.
+- Timesheet total (all-hours) **≥** the invoice's deduped hours — compare against the **Subtotal**, not the Amount Due (a drawdown makes the Amount Due net of credit; see Step 3). If it's not, something's wrong.
 - The invoice PDF (ES-XXXX.pdf) and both timesheet files share the same ES-XXXX number.
 - Descriptions read like a client would want, not like git.
 
