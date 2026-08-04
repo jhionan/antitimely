@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rian/antitimely/internal/invoice"
 	"github.com/rian/antitimely/internal/rpcapi"
 )
 
@@ -265,8 +266,9 @@ func invoiceMenu(stdin *bufio.Scanner) {
 		fmt.Println("Invoices:")
 		fmt.Println("  [1] List all invoices")
 		fmt.Println("  [2] Generate invoice (PDF)")
-		fmt.Println("  [3] Delete invoice")
-		fmt.Println("  [4] Record anchor only (advanced)")
+		fmt.Println("  [3] Issue advance (prepayment)")
+		fmt.Println("  [4] Delete invoice")
+		fmt.Println("  [5] Record anchor only (advanced)")
 		fmt.Println("  [b] Back")
 		choice, ok := promptLine(stdin, "Choice: ")
 		if !ok {
@@ -278,12 +280,14 @@ func invoiceMenu(stdin *bufio.Scanner) {
 		case "2":
 			invoiceGenerateFlow(stdin)
 		case "3":
+			invoiceAdvanceFlow(stdin)
+		case "4":
 			idStr, ok := promptLine(stdin, "Invoice ID to delete: ")
 			if !ok || idStr == "" {
 				continue
 			}
 			invoiceDelete([]string{idStr})
-		case "4":
+		case "5":
 			company, ok := pickCompany(stdin)
 			if !ok {
 				continue
@@ -338,6 +342,79 @@ func invoiceGenerateFlow(stdin *bufio.Scanner) {
 		return
 	}
 	fmt.Printf("Generated %s — %s\n", reply.Number, reply.PDFPath)
+	openAndReveal(reply.PDFPath)
+}
+
+// parseAdvanceAmount wraps parseMoneyCents with the advance-specific rule that
+// the amount must be strictly positive.
+func parseAdvanceAmount(s string) (int64, error) {
+	cents, err := parseMoneyCents(s)
+	if err != nil {
+		return 0, err
+	}
+	if cents <= 0 {
+		return 0, fmt.Errorf("advance amount must be positive")
+	}
+	return cents, nil
+}
+
+// invoiceAdvanceFlow: pick a company, look up its currency, prompt for a
+// prepayment amount, preview and confirm, then issue the advance and open +
+// reveal the PDF. Confirmation happens before the RPC call because issuing
+// burns an invoice number that is never reclaimed.
+func invoiceAdvanceFlow(stdin *bufio.Scanner) {
+	company, ok := pickCompany(stdin)
+	if !ok {
+		return
+	}
+
+	client, code := dialOrExit()
+	if client == nil {
+		_ = code
+		return
+	}
+	var balance rpcapi.InvoiceBalanceReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceBalance", rpcapi.InvoiceBalanceArgs{CompanyName: company}, &balance)
+	client.Close()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+
+	raw, ok := promptLine(stdin, "Advance amount ("+balance.Currency+"): ")
+	if !ok {
+		return
+	}
+	cents, err := parseAdvanceAmount(raw)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+
+	fmt.Printf("\nAbout to issue:\n  %s advance to %s\n", invoice.FormatMoney(cents, balance.Currency), company)
+	confirm, ok := promptLine(stdin, "Issue this advance? This burns an invoice number. [y/N]: ")
+	if !ok || strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+		fmt.Println("  cancelled — nothing issued")
+		return
+	}
+
+	advClient, code := dialOrExit()
+	if advClient == nil {
+		_ = code
+		return
+	}
+	defer advClient.Close()
+	var reply rpcapi.InvoiceAdvanceReply
+	if err := advClient.Call(rpcapi.ServiceName+".InvoiceAdvance", rpcapi.InvoiceAdvanceArgs{
+		CompanyName: company,
+		AmountCents: cents,
+	}, &reply); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	fmt.Printf("Recorded advance %s — %s (%s)\n", reply.Number, reply.PDFPath,
+		invoice.FormatMoney(reply.TotalCents, reply.Currency))
+	fmt.Printf("Credit remaining: %s\n", invoice.FormatMoney(reply.CreditRemainingCents, reply.Currency))
 	openAndReveal(reply.PDFPath)
 }
 
