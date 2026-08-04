@@ -40,7 +40,9 @@ START=$(date -d "<previous anchor, e.g. 2026-06-16 15:52:00>" +%s)
 END=$(date -d "<this invoice anchor, e.g. 2026-07-01 18:11:17>" +%s)
 ```
 
-⚠️ **Filter out advance invoices, or the period collapses.** An advance (`kind='advance'`, e.g. `ES-0007`) is anchor-neutral: its `sent_at` is deliberately pinned to the previous invoice's, so an unfiltered query returns the *same instant* twice — START == END — and the timesheet computes **0 h**. The `kind` column arrives with the credit-drawdown feature; until then use `AND i.number IS NOT NULL` alone and check by eye that the two timestamps differ. Design: `docs/superpowers/specs/2026-08-03-invoice-credit-drawdown-design.md`.
+⚠️ **Filter out advance invoices, or the period collapses.** An advance (`kind='advance'`, e.g. `ES-0007`) is anchor-neutral: its `sent_at` is deliberately pinned to the previous invoice's, so an unfiltered query returns the *same instant* twice — START == END — and the timesheet computes **0 h**. The `kind` column is live, so the filter above is authoritative — no eyeballing needed. Design: `docs/superpowers/specs/2026-08-03-invoice-credit-drawdown-design.md`.
+
+Check the outstanding credit before invoicing: `atl invoice balance BClouder`. A period whose hours are fully covered by the advance produces a correct invoice with **0.00 due** — that is not an error, and the Subtotal is still the figure to reconcile the timesheet against.
 
 BClouder project ids: **VCNA=5, Rumo=6, Daas=7** (verify: `SELECT id,name FROM projects p JOIN companies c ON c.id=p.company_id WHERE c.name='BClouder';`).
 
