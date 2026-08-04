@@ -168,6 +168,21 @@ ORDER BY i.sent_at DESC;
 -- name: DeleteInvoice :exec
 DELETE FROM invoices WHERE id = ?;
 
+-- name: GetInvoiceByID :one
+-- Used by the InvoiceDelete guard: an invoice that is kind='advance' or has
+-- drawn down credit (credit_applied_cents > 0) must not be deleted without
+-- --force, since the balance is derived from these rows and the client's PDF
+-- already reflects the credit as consumed.
+SELECT id, company_id, sent_at, note, created_at, number, pdf_path,
+       total_cents, currency, sender_key, kind, credit_applied_cents, discount_cents
+FROM invoices WHERE id = ?;
+
+-- name: CountInvoicesByCompanyID :one
+-- Used by the CompanyDelete guard: invoices.company_id is ON DELETE CASCADE,
+-- so an unguarded delete of a company with any invoices would silently
+-- vaporise advance credit along with the row history.
+SELECT COUNT(*) AS invoice_count FROM invoices WHERE company_id = ?;
+
 -- name: LastInvoicePerCompany :many
 SELECT company_id, MAX(sent_at) AS last_sent
 FROM invoices GROUP BY company_id;

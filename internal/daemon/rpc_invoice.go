@@ -107,6 +107,53 @@ func resolvePDFPath(cfg *invoice.SendersConfig, sender invoice.Sender, senderKey
 	return filepath.Join(senderDir, number+".pdf"), nil
 }
 
+// renderInvoicePDF renders doc and returns the path it was actually written
+// to. On a real run that is a hidden, dot-prefixed temp file beside pdfPath
+// (same directory => same filesystem, so the later os.Rename in
+// finalizeInvoicePDF is atomic) — never pdfPath itself. A numbered PDF must
+// not exist at its final, client-facing path until the invoice row that
+// describes it has committed: otherwise a daemon crash or handler-deadline
+// abort between render and commit leaves a complete, numbered PDF on disk
+// with no corresponding row, and a client-facing filename that looks final
+// while nothing durable backs it. On a dry run pdfPath is already a
+// throwaway os.CreateTemp file (see resolvePDFPath) with no client-facing
+// counterpart, so it renders straight to it.
+func renderInvoicePDF(doc invoice.InvoiceDoc, pdfPath string, dryRun bool) (renderedAt string, err error) {
+	if dryRun {
+		if err := invoice.RenderPDF(doc, pdfPath); err != nil {
+			_ = os.Remove(pdfPath)
+			return "", err
+		}
+		return pdfPath, nil
+	}
+	tmpPath := filepath.Join(filepath.Dir(pdfPath), "."+filepath.Base(pdfPath)+".tmp")
+	if err := invoice.RenderPDF(doc, tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	return tmpPath, nil
+}
+
+// finalizeInvoicePDF moves a rendered PDF into its final, client-facing path
+// after the transaction that inserted its row has committed. Must only be
+// called post-commit: the row is the source of truth, and this is what
+// lands the file to match it. If the rename itself fails, the invoice row
+// already exists (the caller should NOT retry the whole operation, which
+// would allocate and consume credit against a second number) — the error
+// names both paths so the file can be moved into place by hand.
+func finalizeInvoicePDF(renderedAt, pdfPath, number string) error {
+	if renderedAt == pdfPath {
+		return nil // dry run: rendered straight to its (temp) destination
+	}
+	if err := os.Rename(renderedAt, pdfPath); err != nil {
+		return fmt.Errorf(
+			"invoice %s committed but its PDF could not be moved from %s into place at %s: %w "+
+				"(the invoice row already exists — move the file by hand rather than retrying)",
+			number, renderedAt, pdfPath, err)
+	}
+	return nil
+}
+
 // InvoiceGenerate implements the full generation flow per the design spec.
 func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, reply *rpcapi.InvoiceGenerateReply) error {
 	ctx, cancel := handlerCtx()
@@ -262,8 +309,8 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	if err != nil {
 		return err
 	}
-	if err := invoice.RenderPDF(doc, pdfPath); err != nil {
-		_ = os.Remove(pdfPath)
+	renderedAt, err := renderInvoicePDF(doc, pdfPath, args.DryRun)
+	if err != nil {
 		return err
 	}
 
@@ -285,17 +332,21 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 			DiscountCents:      args.DiscountCents,
 		})
 		if err != nil {
-			_ = os.Remove(pdfPath)
+			_ = os.Remove(renderedAt)
 			return err
 		}
 		invoiceID = id
 	}
 
 	if err := tx.Commit(); err != nil {
-		_ = os.Remove(pdfPath)
+		_ = os.Remove(renderedAt)
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+
+	if err := finalizeInvoicePDF(renderedAt, pdfPath, number); err != nil {
+		return err
+	}
 
 	reply.InvoiceID = invoiceID
 	reply.Number = number
@@ -437,8 +488,8 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 	if err != nil {
 		return err
 	}
-	if err := invoice.RenderPDF(doc, pdfPath); err != nil {
-		_ = os.Remove(pdfPath)
+	renderedAt, err := renderInvoicePDF(doc, pdfPath, args.DryRun)
+	if err != nil {
 		return err
 	}
 
@@ -458,16 +509,20 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 			CreditAppliedCents: 0,
 			DiscountCents:      0,
 		}); err != nil {
-			_ = os.Remove(pdfPath)
+			_ = os.Remove(renderedAt)
 			return err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		_ = os.Remove(pdfPath)
+		_ = os.Remove(renderedAt)
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+
+	if err := finalizeInvoicePDF(renderedAt, pdfPath, number); err != nil {
+		return err
+	}
 
 	reply.Number = number
 	reply.PDFPath = pdfPath

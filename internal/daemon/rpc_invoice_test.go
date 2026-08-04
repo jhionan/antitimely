@@ -733,3 +733,44 @@ func TestRPC_InvoiceBalance_SkipsNullNumber(t *testing.T) {
 		t.Errorf("Rows missing valid row ES-0007; got %+v", reply.Rows)
 	}
 }
+
+func TestRPC_InvoiceDelete_RefusesDrawdownWithoutForce(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (id, company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents)
+		SELECT 50, id, 200, 200, 'ES-0008', 0, 'CAD', 'hourly', 600000 FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.InvoiceDeleteReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceDelete",
+		rpcapi.InvoiceDeleteArgs{ID: 50}, &reply)
+	if err == nil {
+		t.Fatal("expected a refusal: deleting a drawdown re-issues credit the client already saw")
+	}
+	if !strings.Contains(err.Error(), "force") {
+		t.Errorf("error should mention --force, got: %v", err)
+	}
+
+	// With Force it succeeds.
+	if err := client.Call(rpcapi.ServiceName+".InvoiceDelete",
+		rpcapi.InvoiceDeleteArgs{ID: 50, Force: true}, &reply); err != nil {
+		t.Fatalf("forced delete: %v", err)
+	}
+}
+
+func TestRPC_CompanyDelete_RefusesWithInvoices(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind)
+		SELECT id, 100, 100, 'ES-0007', 1462300, 'CAD', 'advance' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.CompanyDeleteReply
+	err := client.Call(rpcapi.ServiceName+".CompanyDelete",
+		rpcapi.CompanyDeleteArgs{Name: "BClouder"}, &reply)
+	if err == nil {
+		t.Fatal("expected a refusal: ON DELETE CASCADE would vaporise the advance")
+	}
+}

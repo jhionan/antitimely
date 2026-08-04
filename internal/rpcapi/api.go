@@ -80,7 +80,14 @@ type InvoiceEntry struct {
 	Note        string
 }
 
-type InvoiceDeleteArgs struct{ ID int64 }
+type InvoiceDeleteArgs struct {
+	ID int64
+	// Force bypasses the drawdown-credit guard: without it, deleting an
+	// invoice that is kind='advance' or has CreditAppliedCents > 0 is
+	// refused, because the derived credit balance would silently re-include
+	// money the client's PDF already shows as consumed.
+	Force bool
+}
 type InvoiceDeleteReply struct{}
 
 type InvoiceGenerateArgs struct {
@@ -299,7 +306,13 @@ type Company struct {
 	Name string
 }
 
-type CompanyDeleteArgs struct{ Name string }
+type CompanyDeleteArgs struct {
+	Name string
+	// Force bypasses the guard that refuses to delete a company with any
+	// invoices: companies.company_id -> invoices is ON DELETE CASCADE, so an
+	// unguarded delete would vaporise any advance credit along with the row.
+	Force bool
+}
 type CompanyDeleteReply struct{}
 
 type ProjectSetCompanyArgs struct {

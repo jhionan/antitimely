@@ -901,10 +901,29 @@ func (s *AntitimelyService) CompanyList(args rpcapi.CompanyListArgs, reply *rpca
 	return nil
 }
 
-// CompanyDelete removes a company by name.
+// CompanyDelete removes a company by name. companies.id -> invoices.company_id
+// is ON DELETE CASCADE, so deleting a company with any invoices would
+// silently vaporise their history — including any advance credit the
+// company's balance is derived from. Refuse unless --force is passed.
 func (s *AntitimelyService) CompanyDelete(args rpcapi.CompanyDeleteArgs, reply *rpcapi.CompanyDeleteReply) error {
 	ctx, cancel := handlerCtx()
 	defer cancel()
+	if !args.Force {
+		c, err := s.Q.GetCompanyByName(ctx, args.Name)
+		if err != nil {
+			return fmt.Errorf("company %q not found: %w", args.Name, err)
+		}
+		count, err := s.Q.CountInvoicesByCompanyID(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf(
+				"company %q has %d invoice(s); deleting it cascades to them (ON DELETE CASCADE) and would "+
+					"vaporise any advance credit along with the row history — pass --force if that is intended",
+				args.Name, count)
+		}
+	}
 	return s.Q.DeleteCompanyByName(ctx, args.Name)
 }
 
@@ -983,10 +1002,29 @@ func (s *AntitimelyService) InvoiceList(args rpcapi.InvoiceListArgs, reply *rpca
 	return nil
 }
 
-// InvoiceDelete removes an invoice by ID.
+// InvoiceDelete removes an invoice by ID. The credit balance is derived from
+// invoice rows (SUM(advance totals) - SUM(credit_applied_cents)), so
+// deleting a row that carries advance credit re-issues money the client
+// already saw consumed on a PDF that is still sitting on disk / in their
+// inbox. Refuse those deletes unless --force is passed.
 func (s *AntitimelyService) InvoiceDelete(args rpcapi.InvoiceDeleteArgs, reply *rpcapi.InvoiceDeleteReply) error {
 	ctx, cancel := handlerCtx()
 	defer cancel()
+	if !args.Force {
+		inv, err := s.Q.GetInvoiceByID(ctx, args.ID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("invoice %d not found", args.ID)
+			}
+			return err
+		}
+		if inv.Kind == "advance" || inv.CreditAppliedCents > 0 {
+			return fmt.Errorf(
+				"invoice %s carries advance credit (kind=%s, applied=%d cents); deleting it changes the credit "+
+					"balance while the client still holds the PDF at %s — pass --force if that is intended",
+				inv.Number.String, inv.Kind, inv.CreditAppliedCents, inv.PdfPath.String)
+		}
+	}
 	return s.Q.DeleteInvoice(ctx, args.ID)
 }
 

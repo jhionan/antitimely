@@ -129,11 +129,17 @@ func invoiceList(args []string) int {
 }
 
 func invoiceDelete(args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice delete <id>")
+	fs := flag.NewFlagSet("invoice delete", flag.ExitOnError)
+	force := fs.Bool("force", false, "Delete even if the invoice carries advance credit (kind=advance or credit_applied_cents > 0)")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 64
 	}
-	id, err := strconv.ParseInt(args[0], 10, 64)
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice delete [--force] <id>")
+		return 64
+	}
+	id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "invalid id")
 		return 64
@@ -144,7 +150,7 @@ func invoiceDelete(args []string) int {
 	}
 	defer client.Close()
 	if err := client.Call(rpcapi.ServiceName+".InvoiceDelete",
-		rpcapi.InvoiceDeleteArgs{ID: id}, &rpcapi.InvoiceDeleteReply{}); err != nil {
+		rpcapi.InvoiceDeleteArgs{ID: id, Force: *force}, &rpcapi.InvoiceDeleteReply{}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

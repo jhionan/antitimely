@@ -287,6 +287,20 @@ func (q *Queries) CountDistinctCompanyTicksSince(ctx context.Context, arg CountD
 	return tick_count, err
 }
 
+const countInvoicesByCompanyID = `-- name: CountInvoicesByCompanyID :one
+SELECT COUNT(*) AS invoice_count FROM invoices WHERE company_id = ?
+`
+
+// Used by the CompanyDelete guard: invoices.company_id is ON DELETE CASCADE,
+// so an unguarded delete of a company with any invoices would silently
+// vaporise advance credit along with the row history.
+func (q *Queries) CountInvoicesByCompanyID(ctx context.Context, companyID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countInvoicesByCompanyID, companyID)
+	var invoice_count int64
+	err := row.Scan(&invoice_count)
+	return invoice_count, err
+}
+
 const countPendingReviewSignatures = `-- name: CountPendingReviewSignatures :one
 SELECT COUNT(DISTINCT o.id) AS n
 FROM observations o
@@ -392,6 +406,37 @@ func (q *Queries) GetCompanyForInvoice(ctx context.Context, name string) (Compan
 		&i.Currency,
 		&i.RateCents,
 		&i.BilledFrom,
+	)
+	return i, err
+}
+
+const getInvoiceByID = `-- name: GetInvoiceByID :one
+SELECT id, company_id, sent_at, note, created_at, number, pdf_path,
+       total_cents, currency, sender_key, kind, credit_applied_cents, discount_cents
+FROM invoices WHERE id = ?
+`
+
+// Used by the InvoiceDelete guard: an invoice that is kind='advance' or has
+// drawn down credit (credit_applied_cents > 0) must not be deleted without
+// --force, since the balance is derived from these rows and the client's PDF
+// already reflects the credit as consumed.
+func (q *Queries) GetInvoiceByID(ctx context.Context, id int64) (Invoice, error) {
+	row := q.db.QueryRowContext(ctx, getInvoiceByID, id)
+	var i Invoice
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.SentAt,
+		&i.Note,
+		&i.CreatedAt,
+		&i.Number,
+		&i.PdfPath,
+		&i.TotalCents,
+		&i.Currency,
+		&i.SenderKey,
+		&i.Kind,
+		&i.CreditAppliedCents,
+		&i.DiscountCents,
 	)
 	return i, err
 }

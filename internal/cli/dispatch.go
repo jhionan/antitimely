@@ -70,12 +70,12 @@ Usage:
   antitimely daemon  [--interval=5s] [--idle-thresh=120s] [--agent-cpu-thresh=5]
   antitimely status
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
-  antitimely company  add <name>  |  list  |  delete <name>
+  antitimely company  add <name>  |  list  |  delete [--force] <name>
   antitimely invoice  generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--discount=AMOUNT] [--no-credit] [--dry-run] [--allow-empty]
                       advance <company> --amount=AMOUNT [--note=...] [--issue-date=YYYY-MM-DD] [--dry-run]
                       balance <company>                (read-only: remaining advance credit)
                       send [--at=YYYY-MM-DD] [--note=...] <company>   (anchor only, no PDF — kept for back-compat)
-                      list [<company>]  |  delete <id>  |  show-senders
+                      list [<company>]  |  delete [--force] <id>  |  show-senders
   antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]  |  pause <name>  |  resume <name>  |  pause-all  |  resume-all
   antitimely end-day                  shortcut for 'project pause-all' (use to stop all tracking at end of day)
   antitimely start-day                shortcut for 'project resume-all' (use to resume tracking at start of day)

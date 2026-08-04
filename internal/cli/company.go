@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -67,20 +68,27 @@ func companyList() int {
 }
 
 func companyDelete(args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely company delete <name>")
+	fs := flag.NewFlagSet("company delete", flag.ExitOnError)
+	force := fs.Bool("force", false, "Delete even if the company has invoices (cascades and can vaporise advance credit)")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 64
 	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely company delete [--force] <name>")
+		return 64
+	}
+	name := fs.Arg(0)
 	client, code := dialOrExit()
 	if client == nil {
 		return code
 	}
 	defer client.Close()
 	if err := client.Call(rpcapi.ServiceName+".CompanyDelete",
-		rpcapi.CompanyDeleteArgs{Name: args[0]}, &rpcapi.CompanyDeleteReply{}); err != nil {
+		rpcapi.CompanyDeleteArgs{Name: name, Force: *force}, &rpcapi.CompanyDeleteReply{}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Deleted company %q\n", args[0])
+	fmt.Printf("Deleted company %q\n", name)
 	return 0
 }
