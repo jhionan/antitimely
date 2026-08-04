@@ -186,8 +186,18 @@ FROM invoices WHERE id = ?;
 SELECT COUNT(*) AS invoice_count FROM invoices WHERE company_id = ?;
 
 -- name: LastInvoicePerCompany :many
+-- Per-company billing anchor used by Status for the "(since: ...)" column.
+-- Excludes kind='advance' for the same reason LastInvoiceSentForCompany
+-- does: an advance closes no billing period. Without the filter, issuing an
+-- advance would reset a company's unbilled figure in `atl status` to ~0h
+-- while `atl invoice generate` still bills from the last real invoice: the
+-- dashboard and the document would disagree in the direction of
+-- "nothing to bill".
+-- NOTE: keep every comment in this file pure ASCII. sqlc tracks query text
+-- by byte offset but counts comment length in runes, so a multi-byte
+-- character anywhere above shifts every generated query string after it.
 SELECT company_id, MAX(sent_at) AS last_sent
-FROM invoices GROUP BY company_id;
+FROM invoices WHERE kind <> 'advance' GROUP BY company_id;
 
 -- name: UnassignedTicksAllTime :one
 SELECT COUNT(DISTINCT ts) AS tick_count FROM ticks WHERE project_id IS NULL;

@@ -293,12 +293,52 @@ func TestLastInvoiceSentForCompany_IgnoresAdvances(t *testing.T) {
 	}
 }
 
+// TestLastInvoicePerCompany_IgnoresAdvances covers the OTHER anchor query.
+// Status uses this one for each company's unbilled "(since: ...)" figure. If
+// it counted advances, issuing one (which stamps `now`) would reset the
+// dashboard's unbilled hours to ~0 while invoice generate still billed from
+// the last real invoice.
+func TestLastInvoicePerCompany_IgnoresAdvances(t *testing.T) {
+	_, db, _ := setupRPCServer(t)
+	q := store.New(db)
+	ctx := context.Background()
+
+	if _, err := db.Exec(`
+		INSERT INTO companies (id, name, created_at) VALUES (3, 'BClouder', 0), (4, 'AdvanceOnly', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind) VALUES
+		 (3, 1000, 1000, 'ES-0006',  537700, 'CAD', 'hourly'),
+		 (3, 5000, 5000, 'ES-0007', 1462300, 'CAD', 'advance'),
+		 (4, 7000, 7000, 'ES-0008',  100000, 'CAD', 'advance')`); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := q.LastInvoicePerCompany(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors := map[int64]int64{}
+	for _, r := range rows {
+		anchors[r.CompanyID] = asInt64(r.LastSent)
+	}
+	if anchors[3] != 1000 {
+		t.Errorf("anchor for BClouder = %d, want 1000 — the advance at 5000 must not move it", anchors[3])
+	}
+	if _, ok := anchors[4]; ok {
+		t.Errorf("AdvanceOnly has only an advance, so it must have no anchor at all; got %d", anchors[4])
+	}
+}
+
 // seedHourlyCompanyWithTicks creates company "BClouder" billed hourly at
 // 50.00 CAD/hr from sender "br", backdates its created_at far enough into
 // the past that hours*3600 seconds worth of 5s-grid ticks land safely
 // before "now" (the upper bound of the default hourly period), and writes
-// the sender config used by InvoiceGenerate.
-func seedHourlyCompanyWithTicks(t *testing.T, client *rpc.Client, db *sql.DB, hours float64) {
+// the sender config used by InvoiceGenerate. Returns the configured
+// invoice.output_dir (real-run PDFs land in <outDir>/<senderKey>/); most
+// callers ignore it.
+func seedHourlyCompanyWithTicks(t *testing.T, client *rpc.Client, db *sql.DB, hours float64) string {
 	t.Helper()
 
 	var add rpcapi.CompanyAddReply
@@ -373,6 +413,7 @@ func seedHourlyCompanyWithTicks(t *testing.T, client *rpc.Client, db *sql.DB, ho
 		t.Fatal(err)
 	}
 	t.Setenv("ANTITIMELY_CONFIG", cfgPath)
+	return outDir
 }
 
 func TestRPC_InvoiceGenerate_AppliesAdvanceCredit(t *testing.T) {
@@ -429,6 +470,131 @@ func TestRPC_InvoiceGenerate_NoCreditBillsFull(t *testing.T) {
 	}
 	if reply.TotalCents != 600000 {
 		t.Errorf("TotalCents = %d, want 600000", reply.TotalCents)
+	}
+	// CreditRemainingCents documents itself as the remaining balance. Under
+	// --no-credit nothing is drawn down, so it must still report the credit
+	// the company actually holds, not 0.
+	if reply.CreditRemainingCents != 1462300 {
+		t.Errorf("CreditRemainingCents = %d, want 1462300 — --no-credit leaves the balance untouched, it does not zero it",
+			reply.CreditRemainingCents)
+	}
+}
+
+// TestRPC_InvoiceGenerate_NamesOldestAdvanceWithCreditLeft covers the FIFO
+// reference rule: once the first advance is fully consumed, the document must
+// cite the next advance, not the exhausted one the client's bookkeeper has
+// already reconciled.
+func TestRPC_InvoiceGenerate_NamesOldestAdvanceWithCreditLeft(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 20.0) // 20 h at 50.00/h = 1,000.00
+
+	// ES-0005 advanced 1,000.00 and was fully drawn down by ES-0006.
+	// ES-0007 advanced 5,000.00 and is untouched — that is the live one.
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents)
+		SELECT id, 100, 100, 'ES-0005', 100000, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'
+		UNION ALL
+		SELECT id, 200, 200, 'ES-0006',      0, 'CAD', 'hourly', 100000 FROM companies WHERE name='BClouder'
+		UNION ALL
+		SELECT id, 300, 300, 'ES-0007', 500000, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceGenerateReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceGenerate",
+		rpcapi.InvoiceGenerateArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.CreditAppliedCents != 100000 {
+		t.Fatalf("CreditAppliedCents = %d, want 100000", reply.CreditAppliedCents)
+	}
+
+	text := extractPDFTextRPC(t, reply.PDFPath)
+	if !strings.Contains(text, "ES-0007") {
+		t.Errorf("PDF should cite ES-0007 (the advance with credit left); got:\n%s", text)
+	}
+	if strings.Contains(text, "ES-0005") {
+		t.Errorf("PDF still cites the exhausted advance ES-0005; got:\n%s", text)
+	}
+}
+
+// TestRPC_InvoiceGenerate_LeavesNoPDFWhenInsertFails pins the render-to-temp
+// half of "render the PDF, but only land it after the row commits": a failed
+// insert must leave nothing behind at either the client-facing path or the
+// hidden temp path beside it.
+func TestRPC_InvoiceGenerate_LeavesNoPDFWhenInsertFails(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	outDir := seedHourlyCompanyWithTicks(t, client, db, 120.0)
+
+	// Force the invoice INSERT to fail after the PDF has been rendered.
+	if _, err := db.Exec(
+		`CREATE TRIGGER refuse_invoice BEFORE INSERT ON invoices BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DROP TRIGGER refuse_invoice`)
+
+	var reply rpcapi.InvoiceGenerateReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceGenerate",
+		rpcapi.InvoiceGenerateArgs{CompanyName: "BClouder"}, &reply); err == nil {
+		t.Fatal("expected InvoiceGenerate to fail: the insert is rigged to abort")
+	}
+
+	senderDir := filepath.Join(outDir, "br")
+	final := filepath.Join(senderDir, "ES-0008.pdf")
+	tmp := filepath.Join(senderDir, ".ES-0008.pdf.tmp")
+	if _, err := os.Stat(final); !os.IsNotExist(err) {
+		t.Errorf("orphan PDF left at the client-facing path %s (stat err = %v)", final, err)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("rendered temp PDF left at %s (stat err = %v)", tmp, err)
+	}
+	var n int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM invoices`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("invoices rows = %d after the aborted insert, want 0", n)
+	}
+}
+
+// TestRPC_InvoiceGenerate_RendersToTempThenRenames pins the ORDERING that
+// TestRPC_InvoiceGenerate_LeavesNoPDFWhenInsertFails cannot: rendering
+// straight to the final path would still pass that test, because the failure
+// branch removes whatever it rendered.
+//
+// Here the final path is occupied by a directory, so the two implementations
+// diverge observably. Rendering to a temp file first succeeds, the row
+// commits, and only the closing os.Rename fails — leaving a committed
+// invoice and an error naming both paths. Rendering straight to the final
+// path would instead fail before any row existed.
+func TestRPC_InvoiceGenerate_RendersToTempThenRenames(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	outDir := seedHourlyCompanyWithTicks(t, client, db, 120.0)
+
+	senderDir := filepath.Join(outDir, "br")
+	if err := os.MkdirAll(filepath.Join(senderDir, "ES-0008.pdf"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceGenerateReply
+	err := client.Call(rpcapi.ServiceName+".InvoiceGenerate",
+		rpcapi.InvoiceGenerateArgs{CompanyName: "BClouder"}, &reply)
+	if err == nil {
+		t.Fatal("expected the final rename to fail: a directory occupies the destination")
+	}
+	if !strings.Contains(err.Error(), "committed") {
+		t.Errorf("error should report that the row committed and only the move failed; got: %v", err)
+	}
+
+	// The row must exist: the commit happens before the file is landed, so a
+	// rename failure never rolls the invoice back.
+	var n int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM invoices WHERE number='ES-0008'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("invoices rows for ES-0008 = %d, want 1 — the PDF is rendered to a temp path so the row can commit first", n)
 	}
 }
 

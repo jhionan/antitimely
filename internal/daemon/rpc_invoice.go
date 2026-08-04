@@ -154,6 +154,39 @@ func finalizeInvoicePDF(renderedAt, pdfPath, number string) error {
 	return nil
 }
 
+// oldestUnexhaustedAdvance returns the invoice number of the advance a new
+// drawdown is actually drawing from, i.e. the oldest advance that still has
+// credit left (FIFO) — that is the number printed on the client's PDF.
+//
+// rows come from CompanyCreditRows, newest first, and hold both sides of the
+// ledger: advances (credits) and invoices that drew credit down (debits).
+// Credit is consumed in issue order, so walking the advances oldest-first and
+// accumulating their totals, the first one whose running total exceeds
+// everything already drawn down is the one still being spent. Naming the
+// oldest advance unconditionally instead would keep citing an advance the
+// client's bookkeeper can see was fully consumed.
+//
+// Returns "" when the ledger is exhausted (or holds no numbered advance);
+// the caller also blanks the reference when nothing is applied.
+func oldestUnexhaustedAdvance(rows []store.CompanyCreditRowsRow) string {
+	var drawnDown int64
+	for _, r := range rows {
+		drawnDown += r.CreditAppliedCents
+	}
+	var advanced int64
+	for i := len(rows) - 1; i >= 0; i-- { // oldest first
+		r := rows[i]
+		if r.Kind != "advance" {
+			continue
+		}
+		advanced += r.TotalCents.Int64 // legacy NULL total counts as 0
+		if advanced > drawnDown && r.Number.Valid {
+			return r.Number.String
+		}
+	}
+	return ""
+}
+
 // InvoiceGenerate implements the full generation flow per the design spec.
 func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, reply *rpcapi.InvoiceGenerateReply) error {
 	ctx, cancel := handlerCtx()
@@ -226,35 +259,6 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		}
 	}
 
-	// Read the credit balance BEFORE BeginTx: the DB is SetMaxOpenConns(1),
-	// so a s.Q query issued once the transaction holds that single
-	// connection deadlocks until the handler's context deadline.
-	var creditRemaining int64
-	var creditRef string
-	if !args.NoCredit {
-		creditRemaining, err = s.Q.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
-			CompanyID: co.ID,
-			Currency:  co.Currency,
-		})
-		if err != nil {
-			return fmt.Errorf("read credit balance: %w", err)
-		}
-		rows, err := s.Q.CompanyCreditRows(ctx, store.CompanyCreditRowsParams{
-			CompanyID: co.ID,
-			Currency:  co.Currency,
-		})
-		if err != nil {
-			return fmt.Errorf("read credit rows: %w", err)
-		}
-		// FIFO: the oldest advance is the one we name on the document.
-		for i := len(rows) - 1; i >= 0; i-- {
-			if rows[i].Kind == "advance" && rows[i].Number.Valid {
-				creditRef = rows[i].Number.String
-				break
-			}
-		}
-	}
-
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -267,6 +271,40 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	}()
 	qtx := s.Q.WithTx(tx)
 
+	// Read the credit balance and ledger INSIDE the transaction, on qtx.
+	//
+	// It must not be read before BeginTx: the drawdown is a
+	// read-modify-write (observe the balance, then insert a row that
+	// consumes it), and reading outside the transaction lets two concurrent
+	// generates for the same company both see the full credit and both
+	// spend it. The resulting negative balance is clamped to 0 by
+	// ApplyCredit, so a double-spend would silently self-heal rather than
+	// surface. Reading on qtx serialises the observation with the insert.
+	//
+	// The distinction that matters here: the DB is SetMaxOpenConns(1), so
+	// issuing this through s.Q while the transaction holds that single
+	// connection WOULD deadlock until the handler's deadline. qtx runs on
+	// the transaction's own connection and does not. Do not "simplify"
+	// these back to s.Q.
+	//
+	// The balance is read even under --no-credit: it is reported to the
+	// caller either way (only the drawdown itself is suppressed).
+	creditRemaining, err := qtx.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
+		CompanyID: co.ID,
+		Currency:  co.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("read credit balance: %w", err)
+	}
+	creditRows, err := qtx.CompanyCreditRows(ctx, store.CompanyCreditRowsParams{
+		CompanyID: co.ID,
+		Currency:  co.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("read credit rows: %w", err)
+	}
+	creditRef := oldestUnexhaustedAdvance(creditRows)
+
 	allocatedNumber, err := allocateInvoiceNumber(ctx, tx, qtx, args.DryRun, senderKey, sender.Invoice.NextNumber)
 	if err != nil {
 		return fmt.Errorf("allocate invoice number: %w", err)
@@ -275,7 +313,10 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	number := invoice.FormatInvoiceNumber(sender.Invoice.NumberPrefix, sender.Invoice.NumberPad, allocatedNumber)
 
 	lineTotal := invoice.ComputeLineItem(co.BillingMode, ticks, s.TickIntervalSeconds, co.RateCents.Int64).TotalCents
-	applied := invoice.ApplyCredit(creditRemaining, lineTotal, args.DiscountCents)
+	var applied int64
+	if !args.NoCredit {
+		applied = invoice.ApplyCredit(creditRemaining, lineTotal, args.DiscountCents)
+	}
 	if applied == 0 {
 		creditRef = ""
 	}
@@ -408,17 +449,6 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 		now = time.Now()
 	}
 
-	// Read the credit balance BEFORE BeginTx (same single-connection
-	// deadlock hazard as InvoiceGenerate): the reply reports the balance
-	// *after* this advance, but this advance itself never draws it down.
-	creditBefore, err := s.Q.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
-		CompanyID: co.ID,
-		Currency:  co.Currency,
-	})
-	if err != nil {
-		return fmt.Errorf("read credit balance: %w", err)
-	}
-
 	if !args.DryRun {
 		if err := s.Q.SeedSenderState(ctx, store.SeedSenderStateParams{
 			SenderKey:         senderKey,
@@ -439,6 +469,20 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 		}
 	}()
 	qtx := s.Q.WithTx(tx)
+
+	// Read the pre-advance balance inside the transaction, on qtx (see the
+	// note in InvoiceGenerate: qtx shares the transaction's connection and
+	// is safe; s.Q here would deadlock on SetMaxOpenConns(1)). The reply
+	// reports the balance *after* this advance; this advance itself never
+	// draws credit down, but reading in-transaction keeps the reported
+	// figure consistent with a concurrent generate's drawdown.
+	creditBefore, err := qtx.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
+		CompanyID: co.ID,
+		Currency:  co.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("read credit balance: %w", err)
+	}
 
 	allocatedNumber, err := allocateInvoiceNumber(ctx, tx, qtx, args.DryRun, senderKey, sender.Invoice.NextNumber)
 	if err != nil {
