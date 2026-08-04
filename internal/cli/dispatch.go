@@ -73,6 +73,7 @@ Usage:
   antitimely company  add <name>  |  list  |  delete <name>
   antitimely invoice  generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--discount=AMOUNT] [--no-credit] [--dry-run] [--allow-empty]
                       advance <company> --amount=AMOUNT [--note=...] [--issue-date=YYYY-MM-DD] [--dry-run]
+                      balance <company>                (read-only: remaining advance credit)
                       send [--at=YYYY-MM-DD] [--note=...] <company>   (anchor only, no PDF — kept for back-compat)
                       list [<company>]  |  delete <id>  |  show-senders
   antitimely project  add [--company=<name>] <name>  |  list  |  delete <name>  |  set-company <project> [<company>]  |  pause <name>  |  resume <name>  |  pause-all  |  resume-all

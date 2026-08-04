@@ -19,10 +19,10 @@ type StatusReply struct {
 	PermissionState           string // "ok" | "accessibility_denied" | "unknown"
 
 	// New grouped fields:
-	TodayTotalSeconds         int64          // sum of all project ticks today (distinct ts)
+	TodayTotalSeconds         int64           // sum of all project ticks today (distinct ts)
 	Companies                 []CompanyTotals // ordered by company name; unassigned last
-	UnassignedBillableSeconds int64          // all-time unassigned ticks in seconds
-	DaemonUptimeSeconds       int64          // seconds since the daemon started
+	UnassignedBillableSeconds int64           // all-time unassigned ticks in seconds
+	DaemonUptimeSeconds       int64           // seconds since the daemon started
 }
 
 type CompanyTotals struct {
@@ -64,7 +64,7 @@ type LatestTickReply struct {
 
 type InvoiceSendArgs struct {
 	CompanyName string
-	SentAtUnix  int64  // 0 = use server's "now"
+	SentAtUnix  int64 // 0 = use server's "now"
 	Note        string
 }
 type InvoiceSendReply struct{ ID int64 }
@@ -127,6 +127,22 @@ type InvoiceAdvanceReply struct {
 	Currency             string
 	TotalCents           int64
 	CreditRemainingCents int64
+}
+
+type InvoiceBalanceArgs struct{ CompanyName string }
+
+type InvoiceBalanceReply struct {
+	Currency       string
+	RemainingCents int64
+	RateCents      int64
+	Rows           []InvoiceBalanceRow
+}
+
+type InvoiceBalanceRow struct {
+	Number             string
+	Kind               string
+	TotalCents         int64
+	CreditAppliedCents int64
 }
 
 // --- Allowlist ---

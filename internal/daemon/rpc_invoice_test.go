@@ -655,3 +655,43 @@ func TestRPC_InvoiceAdvance_PDFShowsIssueMonthPeriod(t *testing.T) {
 		t.Errorf("PDF still shows the zero-value period; got:\n%s", text)
 	}
 }
+
+func TestRPC_InvoiceBalance(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents)
+		SELECT id, 100, 100, 'ES-0007', 1462300, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'
+		UNION ALL
+		SELECT id, 200, 200, 'ES-0008', 0, 'CAD', 'hourly', 600000 FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceBalanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceBalance",
+		rpcapi.InvoiceBalanceArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.RemainingCents != 862300 {
+		t.Errorf("RemainingCents = %d, want 862300", reply.RemainingCents)
+	}
+	if len(reply.Rows) != 2 {
+		t.Fatalf("len(Rows) = %d, want 2", len(reply.Rows))
+	}
+	if reply.Rows[0].Number != "ES-0008" { // newest first
+		t.Errorf("Rows[0].Number = %q, want ES-0008", reply.Rows[0].Number)
+	}
+}
+
+func TestRPC_InvoiceBalance_NoCredit(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	var reply rpcapi.InvoiceBalanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceBalance",
+		rpcapi.InvoiceBalanceArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.RemainingCents != 0 || len(reply.Rows) != 0 {
+		t.Errorf("want zero balance and no rows, got %d / %d rows", reply.RemainingCents, len(reply.Rows))
+	}
+}

@@ -16,7 +16,7 @@ import (
 
 func cmdInvoice(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|advance|show-senders|setup> ...")
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice <send|list|delete|generate|advance|balance|show-senders|setup> ...")
 		return 64
 	}
 	switch args[0] {
@@ -30,6 +30,8 @@ func cmdInvoice(args []string) int {
 		return invoiceGenerate(args[1:])
 	case "advance":
 		return invoiceAdvance(args[1:])
+	case "balance":
+		return invoiceBalance(args[1:])
 	case "show-senders":
 		return invoiceShowSenders(args[1:])
 	case "setup":
@@ -273,6 +275,53 @@ func invoiceAdvance(args []string) int {
 		invoice.FormatMoney(reply.TotalCents, reply.Currency))
 	fmt.Printf("Credit remaining: %s\n", invoice.FormatMoney(reply.CreditRemainingCents, reply.Currency))
 	openAndReveal(reply.PDFPath)
+	return 0
+}
+
+func invoiceBalance(args []string) int {
+	fs := flag.NewFlagSet("invoice balance", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 64
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: antitimely invoice balance <company>")
+		return 64
+	}
+	company := fs.Arg(0)
+
+	client, code := dialOrExit()
+	if client == nil {
+		return code
+	}
+	defer client.Close()
+	var reply rpcapi.InvoiceBalanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceBalance",
+		rpcapi.InvoiceBalanceArgs{CompanyName: company}, &reply); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	fmt.Printf("%s\n", company)
+	if len(reply.Rows) == 0 {
+		fmt.Println("  (no advances on record)")
+	}
+	for _, r := range reply.Rows {
+		if r.Kind == "advance" {
+			fmt.Printf("  Advance issued   %14s   %s\n", invoice.FormatMoney(r.TotalCents, reply.Currency), r.Number)
+		} else {
+			fmt.Printf("  Applied          %14s   %s\n", invoice.FormatMoney(r.CreditAppliedCents, reply.Currency), r.Number)
+		}
+	}
+	fmt.Printf("  %s\n", strings.Repeat("─", 46))
+	if reply.RateCents > 0 {
+		hours := float64(reply.RemainingCents) / float64(reply.RateCents)
+		fmt.Printf("  Remaining credit %14s   ≈ %.2f h @ %s/h\n",
+			invoice.FormatMoney(reply.RemainingCents, reply.Currency), hours,
+			invoice.FormatMoney(reply.RateCents, reply.Currency))
+	} else {
+		fmt.Printf("  Remaining credit %14s\n", invoice.FormatMoney(reply.RemainingCents, reply.Currency))
+	}
 	return 0
 }
 

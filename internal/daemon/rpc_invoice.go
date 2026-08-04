@@ -234,9 +234,9 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	}
 
 	doc, err := invoice.BuildDoc(invoice.BuildDocInput{
-		Now:           now,
-		ClientName:    co.Name,
-		Client:        cfg.Clients[co.Name], // zero value if no clients entry
+		Now:        now,
+		ClientName: co.Name,
+		Client:     cfg.Clients[co.Name], // zero value if no clients entry
 
 		BillingMode:   co.BillingMode,
 		Currency:      co.Currency.String,
@@ -474,5 +474,50 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 	reply.Currency = doc.Currency
 	reply.TotalCents = doc.AmountDueCents()
 	reply.CreditRemainingCents = creditBefore + doc.AmountDueCents()
+	return nil
+}
+
+// InvoiceBalance is a read-only report of a company's remaining advance
+// credit and the ledger of advances/drawdowns that produced it. It never
+// writes rows, allocates an invoice number, or moves the billing anchor.
+func (s *AntitimelyService) InvoiceBalance(args rpcapi.InvoiceBalanceArgs, reply *rpcapi.InvoiceBalanceReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+
+	co, err := s.Q.GetCompanyForInvoice(ctx, args.CompanyName)
+	if err != nil {
+		return fmt.Errorf("company %q not found: %w", args.CompanyName, err)
+	}
+
+	remaining, err := s.Q.CompanyCreditBalance(ctx, store.CompanyCreditBalanceParams{
+		CompanyID: co.ID,
+		Currency:  co.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("read credit balance: %w", err)
+	}
+	rows, err := s.Q.CompanyCreditRows(ctx, store.CompanyCreditRowsParams{
+		CompanyID: co.ID,
+		Currency:  co.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("read credit rows: %w", err)
+	}
+
+	reply.Currency = co.Currency.String
+	reply.RemainingCents = remaining
+	reply.RateCents = co.RateCents.Int64
+	reply.Rows = make([]rpcapi.InvoiceBalanceRow, 0, len(rows))
+	for _, r := range rows {
+		if !r.Number.Valid {
+			continue
+		}
+		reply.Rows = append(reply.Rows, rpcapi.InvoiceBalanceRow{
+			Number:             r.Number.String,
+			Kind:               r.Kind,
+			TotalCents:         r.TotalCents.Int64,
+			CreditAppliedCents: r.CreditAppliedCents,
+		})
+	}
 	return nil
 }
