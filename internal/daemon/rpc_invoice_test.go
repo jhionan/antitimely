@@ -590,3 +590,68 @@ func TestRPC_InvoiceAdvance_DryRun(t *testing.T) {
 		t.Errorf("invoices rows = %d on dry-run, want 0", n)
 	}
 }
+
+// extractPDFTextRPC re-reads a rendered PDF's text content. Mirrors the
+// extraction already inlined in TestRPC_InvoiceGenerate_MonthlyFixedHappyPath;
+// pulled out here so TestRPC_InvoiceAdvance_PDFShowsIssueMonthPeriod doesn't
+// have to repeat it.
+func extractPDFTextRPC(t *testing.T, path string) string {
+	t.Helper()
+	f, r, err := pdf.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var sb strings.Builder
+	for i := 1; i <= r.NumPage(); i++ {
+		p := r.Page(i)
+		if p.V.IsNull() {
+			continue
+		}
+		rows, _ := p.GetTextByRow()
+		for _, row := range rows {
+			for _, w := range row.Content {
+				sb.WriteString(w.S)
+				sb.WriteByte(' ')
+			}
+		}
+	}
+	return sb.String()
+}
+
+// TestRPC_InvoiceAdvance_PDFShowsIssueMonthPeriod covers Task 7's review
+// finding: InvoiceAdvance built its InvoiceDoc without PeriodFrom/PeriodTo,
+// so pdf.go's unconditional period line rendered the zero-value range
+// "January 1, 0001 – December 31, 0000" on every advance PDF. The fix pins
+// PeriodFrom to the issue date and PeriodTo to the first of the following
+// month (exclusive, so the printed end date is the issue month's last day) —
+// this asserts on the rendered PDF text, not on doc struct fields, since the
+// original bug was a renderer-visible defect that no struct-level assertion
+// would have caught.
+func TestRPC_InvoiceAdvance_PDFShowsIssueMonthPeriod(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+
+	issueDate := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.Local)
+
+	var reply rpcapi.InvoiceAdvanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceAdvance",
+		rpcapi.InvoiceAdvanceArgs{
+			CompanyName:   "BClouder",
+			AmountCents:   100000,
+			IssueDateUnix: issueDate.Unix(),
+		}, &reply); err != nil {
+		t.Fatal(err)
+	}
+
+	text := extractPDFTextRPC(t, reply.PDFPath)
+	if !strings.Contains(text, "August 4, 2026") {
+		t.Errorf("PDF missing period start %q\n---\n%s\n---", "August 4, 2026", text)
+	}
+	if !strings.Contains(text, "August 31, 2026") {
+		t.Errorf("PDF missing period end %q\n---\n%s\n---", "August 31, 2026", text)
+	}
+	if strings.Contains(text, "January 1, 0001") || strings.Contains(text, "December 31, 0000") {
+		t.Errorf("PDF still shows the zero-value period; got:\n%s", text)
+	}
+}

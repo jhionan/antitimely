@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -26,6 +27,86 @@ func configPath() (string, error) {
 	return filepath.Join(home, ".antitimely", "config.yaml"), nil
 }
 
+// loadValidSender loads the senders/invoice config, validates it, and
+// resolves senderKey to its Sender entry. Shared by every RPC handler that
+// issues an invoice (InvoiceGenerate, InvoiceAdvance): each needs the same
+// config-load-validate-lookup sequence and must fail the same way when the
+// config is missing/invalid or the sender key isn't registered.
+func loadValidSender(senderKey string) (*invoice.SendersConfig, invoice.Sender, error) {
+	cfgPath, err := configPath()
+	if err != nil {
+		return nil, invoice.Sender{}, err
+	}
+	cfg, err := invoice.LoadSendersConfig(cfgPath)
+	if err != nil {
+		return nil, invoice.Sender{}, err
+	}
+	if issues := cfg.Validate(); len(issues) > 0 {
+		return nil, invoice.Sender{}, fmt.Errorf("invalid senders config: %v", issues)
+	}
+	sender, ok := cfg.Senders[senderKey]
+	if !ok {
+		return nil, invoice.Sender{}, fmt.Errorf("sender %q not in config (run `atl invoice show-senders`)", senderKey)
+	}
+	return cfg, sender, nil
+}
+
+// allocateInvoiceNumber returns the invoice number to stamp on this
+// document. On a real run it durably allocates+increments the sender's
+// counter inside the caller's transaction. On a dry run it only *peeks* at
+// the counter (no mutation) so a preview never consumes a real number;
+// sender_state may not have a row yet (never-invoiced sender), in which
+// case it falls back to the config's configured next number.
+func allocateInvoiceNumber(ctx context.Context, tx *sql.Tx, qtx *store.Queries, dryRun bool, senderKey string, configuredNext int64) (int64, error) {
+	if !dryRun {
+		return qtx.AllocateNextInvoiceNumber(ctx, senderKey)
+	}
+	row := tx.QueryRowContext(ctx, "SELECT next_invoice_number FROM sender_state WHERE sender_key = ?", senderKey)
+	var allocated int64
+	if err := row.Scan(&allocated); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return configuredNext, nil
+		}
+		return 0, err
+	}
+	return allocated, nil
+}
+
+// resolvePDFPath returns the path a rendered invoice PDF should be written
+// to. On a dry run it's a throwaway temp file (never surfaced to the
+// client's directory). On a real run it's <senderDir>/<number>.pdf, where
+// senderDir is the sender's own output_dir if set, else the global
+// output_dir with a <senderKey>/ subfolder — creating that directory as
+// needed.
+func resolvePDFPath(cfg *invoice.SendersConfig, sender invoice.Sender, senderKey, number string, dryRun bool) (string, error) {
+	if dryRun {
+		f, err := os.CreateTemp("", "atl-dryrun-*.pdf")
+		if err != nil {
+			return "", err
+		}
+		f.Close()
+		return f.Name(), nil
+	}
+	var senderDir string
+	if sender.OutputDir != "" {
+		d, err := expandHome(sender.OutputDir)
+		if err != nil {
+			return "", err
+		}
+		senderDir = d
+	} else {
+		outDir, err := expandHome(cfg.Invoice.OutputDir)
+		if err != nil {
+			return "", err
+		}
+		senderDir = filepath.Join(outDir, senderKey)
+	}
+	if err := os.MkdirAll(senderDir, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(senderDir, number+".pdf"), nil
+}
+
 // InvoiceGenerate implements the full generation flow per the design spec.
 func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, reply *rpcapi.InvoiceGenerateReply) error {
 	ctx, cancel := handlerCtx()
@@ -42,21 +123,10 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		return fmt.Errorf("company %q has no billed_from sender", co.Name)
 	}
 
-	cfgPath, err := configPath()
-	if err != nil {
-		return err
-	}
-	cfg, err := invoice.LoadSendersConfig(cfgPath)
-	if err != nil {
-		return err
-	}
-	if issues := cfg.Validate(); len(issues) > 0 {
-		return fmt.Errorf("invalid senders config: %v", issues)
-	}
 	senderKey := co.BilledFrom.String
-	sender, ok := cfg.Senders[senderKey]
-	if !ok {
-		return fmt.Errorf("sender %q not in config (run `atl invoice show-senders`)", senderKey)
+	cfg, sender, err := loadValidSender(senderKey)
+	if err != nil {
+		return err
 	}
 
 	var now time.Time
@@ -150,22 +220,9 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 	}()
 	qtx := s.Q.WithTx(tx)
 
-	var allocatedNumber int64
-	if args.DryRun {
-		row := tx.QueryRowContext(ctx, "SELECT next_invoice_number FROM sender_state WHERE sender_key = ?", senderKey)
-		if err := row.Scan(&allocatedNumber); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				allocatedNumber = sender.Invoice.NextNumber
-			} else {
-				return err
-			}
-		}
-	} else {
-		a, err := qtx.AllocateNextInvoiceNumber(ctx, senderKey)
-		if err != nil {
-			return fmt.Errorf("allocate invoice number: %w", err)
-		}
-		allocatedNumber = a
+	allocatedNumber, err := allocateInvoiceNumber(ctx, tx, qtx, args.DryRun, senderKey, sender.Invoice.NextNumber)
+	if err != nil {
+		return fmt.Errorf("allocate invoice number: %w", err)
 	}
 
 	number := invoice.FormatInvoiceNumber(sender.Invoice.NumberPrefix, sender.Invoice.NumberPad, allocatedNumber)
@@ -201,34 +258,9 @@ func (s *AntitimelyService) InvoiceGenerate(args rpcapi.InvoiceGenerateArgs, rep
 		return err
 	}
 
-	var pdfPath string
-	if args.DryRun {
-		f, ferr := os.CreateTemp("", "atl-dryrun-*.pdf")
-		if ferr != nil {
-			return ferr
-		}
-		f.Close()
-		pdfPath = f.Name()
-	} else {
-		// Per-sender output_dir wins and is used directly; otherwise fall back
-		// to the global output_dir with a <senderKey>/ subfolder.
-		var senderDir string
-		if sender.OutputDir != "" {
-			senderDir, err = expandHome(sender.OutputDir)
-			if err != nil {
-				return err
-			}
-		} else {
-			outDir, err := expandHome(cfg.Invoice.OutputDir)
-			if err != nil {
-				return err
-			}
-			senderDir = filepath.Join(outDir, senderKey)
-		}
-		if err := os.MkdirAll(senderDir, 0o700); err != nil {
-			return err
-		}
-		pdfPath = filepath.Join(senderDir, number+".pdf")
+	pdfPath, err := resolvePDFPath(cfg, sender, senderKey, number, args.DryRun)
+	if err != nil {
+		return err
 	}
 	if err := invoice.RenderPDF(doc, pdfPath); err != nil {
 		_ = os.Remove(pdfPath)
@@ -312,21 +344,10 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 		return fmt.Errorf("company %q has no rate; cannot express an advance in hours", co.Name)
 	}
 
-	cfgPath, err := configPath()
-	if err != nil {
-		return err
-	}
-	cfg, err := invoice.LoadSendersConfig(cfgPath)
-	if err != nil {
-		return err
-	}
-	if issues := cfg.Validate(); len(issues) > 0 {
-		return fmt.Errorf("invalid senders config: %v", issues)
-	}
 	senderKey := co.BilledFrom.String
-	sender, ok := cfg.Senders[senderKey]
-	if !ok {
-		return fmt.Errorf("sender %q not in config (run `atl invoice show-senders`)", senderKey)
+	cfg, sender, err := loadValidSender(senderKey)
+	if err != nil {
+		return err
 	}
 
 	var now time.Time
@@ -368,22 +389,9 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 	}()
 	qtx := s.Q.WithTx(tx)
 
-	var allocatedNumber int64
-	if args.DryRun {
-		row := tx.QueryRowContext(ctx, "SELECT next_invoice_number FROM sender_state WHERE sender_key = ?", senderKey)
-		if err := row.Scan(&allocatedNumber); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				allocatedNumber = sender.Invoice.NextNumber
-			} else {
-				return err
-			}
-		}
-	} else {
-		a, err := qtx.AllocateNextInvoiceNumber(ctx, senderKey)
-		if err != nil {
-			return fmt.Errorf("allocate invoice number: %w", err)
-		}
-		allocatedNumber = a
+	allocatedNumber, err := allocateInvoiceNumber(ctx, tx, qtx, args.DryRun, senderKey, sender.Invoice.NextNumber)
+	if err != nil {
+		return fmt.Errorf("allocate invoice number: %w", err)
 	}
 
 	number := invoice.FormatInvoiceNumber(sender.Invoice.NumberPrefix, sender.Invoice.NumberPad, allocatedNumber)
@@ -401,10 +409,20 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 	if !ok {
 		return fmt.Errorf("sender has no bank account for currency %q (and no also_accepts fallback)", co.Currency.String)
 	}
+	// Advances have no billing period (no ticks are being billed), but the
+	// PDF renders the period line unconditionally. To keep an advance
+	// visually consistent with a normal invoice, show the issue date through
+	// the end of that calendar month: PeriodFrom = issue date, PeriodTo =
+	// first day of the following month (exclusive — RenderPDF prints
+	// PeriodTo.AddDate(0,0,-1) as the shown end date).
+	periodFrom := now
+	periodTo := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, 1, 0)
 	doc := invoice.InvoiceDoc{
 		Number:        number,
 		IssueDate:     now,
 		DueDate:       now.AddDate(0, 0, cfg.Invoice.DueDays),
+		PeriodFrom:    periodFrom,
+		PeriodTo:      periodTo,
 		Currency:      co.Currency.String,
 		ClientName:    co.Name,
 		Client:        cfg.Clients[co.Name], // zero value if no clients entry
@@ -415,34 +433,9 @@ func (s *AntitimelyService) InvoiceAdvance(args rpcapi.InvoiceAdvanceArgs, reply
 		LogoPath:      sender.LogoPath,
 	}
 
-	var pdfPath string
-	if args.DryRun {
-		f, ferr := os.CreateTemp("", "atl-dryrun-*.pdf")
-		if ferr != nil {
-			return ferr
-		}
-		f.Close()
-		pdfPath = f.Name()
-	} else {
-		// Per-sender output_dir wins and is used directly; otherwise fall back
-		// to the global output_dir with a <senderKey>/ subfolder.
-		var senderDir string
-		if sender.OutputDir != "" {
-			senderDir, err = expandHome(sender.OutputDir)
-			if err != nil {
-				return err
-			}
-		} else {
-			outDir, err := expandHome(cfg.Invoice.OutputDir)
-			if err != nil {
-				return err
-			}
-			senderDir = filepath.Join(outDir, senderKey)
-		}
-		if err := os.MkdirAll(senderDir, 0o700); err != nil {
-			return err
-		}
-		pdfPath = filepath.Join(senderDir, number+".pdf")
+	pdfPath, err := resolvePDFPath(cfg, sender, senderKey, number, args.DryRun)
+	if err != nil {
+		return err
 	}
 	if err := invoice.RenderPDF(doc, pdfPath); err != nil {
 		_ = os.Remove(pdfPath)
