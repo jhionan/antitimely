@@ -795,3 +795,120 @@ func TestRPC_InvoiceList_ShowsKindAndCredit(t *testing.T) {
 		t.Errorf("item = (%q, %q), want (advance, ES-0007)", reply.Items[0].Kind, reply.Items[0].Number)
 	}
 }
+
+// TestRPC_InvoiceList_OrdersByIDDescOnSentAtTie covers the real ES-0006/
+// ES-0007 case: the advance is anchor-neutral, so it gets stamped with the
+// previous invoice's sent_at and the two rows tie exactly on that column.
+// Without "ORDER BY sent_at DESC, id DESC" their relative order is
+// unspecified by SQLite and can flip between runs. Both list RPCs
+// (all-companies and single-company) share the same ORDER BY, so this also
+// exercises ListAllInvoices via the company_name == "" branch.
+func TestRPC_InvoiceList_OrdersByIDDescOnSentAtTie(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind)
+		SELECT id, 1000, 1000, 'ES-0006', 537700, 'CAD', 'hourly' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents)
+		SELECT id, 1000, 1000, 'ES-0007', 1462300, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+	var id6, id7 int64
+	if err := db.QueryRow(`SELECT id FROM invoices WHERE number='ES-0006'`).Scan(&id6); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT id FROM invoices WHERE number='ES-0007'`).Scan(&id7); err != nil {
+		t.Fatal(err)
+	}
+	if id7 <= id6 {
+		t.Fatalf("test setup invariant broken: id7 (%d) must be > id6 (%d)", id7, id6)
+	}
+
+	var reply rpcapi.InvoiceListReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Items) != 2 {
+		t.Fatalf("len(Items) = %d, want 2", len(reply.Items))
+	}
+	if reply.Items[0].SentAtUnix != reply.Items[1].SentAtUnix {
+		t.Fatalf("test setup invariant broken: sent_at must tie, got %d and %d",
+			reply.Items[0].SentAtUnix, reply.Items[1].SentAtUnix)
+	}
+	if reply.Items[0].ID != id7 || reply.Items[1].ID != id6 {
+		t.Errorf("order = (%d, %d), want (%d, %d) — higher id first on a sent_at tie",
+			reply.Items[0].ID, reply.Items[1].ID, id7, id6)
+	}
+
+	// Same assertion through ListAllInvoices (CompanyName == "").
+	var allReply rpcapi.InvoiceListReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{}, &allReply); err != nil {
+		t.Fatal(err)
+	}
+	if len(allReply.Items) != 2 {
+		t.Fatalf("len(allReply.Items) = %d, want 2", len(allReply.Items))
+	}
+	if allReply.Items[0].ID != id7 || allReply.Items[1].ID != id6 {
+		t.Errorf("ListAllInvoices order = (%d, %d), want (%d, %d) — higher id first on a sent_at tie",
+			allReply.Items[0].ID, allReply.Items[1].ID, id7, id6)
+	}
+}
+
+// TestRPC_InvoiceList_LegacyRowHasZeroValues covers a real row in the
+// production database (the May anchor invoice), which predates the
+// number/total_cents/currency columns and so carries NULL in all three. The
+// RPC handler unwraps sql.NullString/sql.NullInt64 to Go zero values rather
+// than propagating sql.Null* across the wire (see rpc.go InvoiceList and the
+// field comments on rpcapi.InvoiceEntry). This asserts that boundary: the
+// RPC reply must carry the documented zero values, not panic and not drop
+// the row.
+//
+// The "-" substitution for NULL and the "0.00"-vs-"-" distinction for zero
+// applied credit are printer behavior in internal/cli/invoice.go
+// (invoiceList). There is no stdout-capturing test harness for
+// internal/cli — building one is out of scope for this fix — so that half
+// of the rendering (RPC zero-value -> CLI "-") remains unverified by an
+// automated test; it was checked by hand in the prior implementer's report
+// ("Sample list output").
+func TestRPC_InvoiceList_LegacyRowHasZeroValues(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, note)
+		SELECT id, 1621331580, 1621331580, 'May anchor' FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceListReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1", len(reply.Items))
+	}
+	item := reply.Items[0]
+	if item.Number != "" {
+		t.Errorf("Number = %q, want \"\" for a legacy NULL-number row", item.Number)
+	}
+	if item.TotalCents != 0 {
+		t.Errorf("TotalCents = %d, want 0 for a legacy NULL-total_cents row", item.TotalCents)
+	}
+	if item.Currency != "" {
+		t.Errorf("Currency = %q, want \"\" for a legacy NULL-currency row", item.Currency)
+	}
+	if item.Kind != "hourly" {
+		t.Errorf("Kind = %q, want \"hourly\" (schema default)", item.Kind)
+	}
+	if item.CreditAppliedCents != 0 {
+		t.Errorf("CreditAppliedCents = %d, want 0 (schema default)", item.CreditAppliedCents)
+	}
+	if item.Note != "May anchor" {
+		t.Errorf("Note = %q, want %q", item.Note, "May anchor")
+	}
+}
