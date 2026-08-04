@@ -695,3 +695,41 @@ func TestRPC_InvoiceBalance_NoCredit(t *testing.T) {
 		t.Errorf("want zero balance and no rows, got %d / %d rows", reply.RemainingCents, len(reply.Rows))
 	}
 }
+
+// TestRPC_InvoiceBalance_SkipsNullNumber covers the one legacy row observed
+// in the real database: an advance with a NULL number (and NULL total_cents)
+// that must be silently skipped rather than rendered with an empty
+// identifier. It still satisfies CompanyCreditRows' WHERE clause
+// (kind = 'advance') so the guard in InvoiceBalance is what filters it out,
+// not the query.
+func TestRPC_InvoiceBalance_SkipsNullNumber(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents)
+		SELECT id, 50, 50, NULL, NULL, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'
+		UNION ALL
+		SELECT id, 100, 100, 'ES-0007', 1462300, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.InvoiceBalanceReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceBalance",
+		rpcapi.InvoiceBalanceArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reply.Rows {
+		if r.Number == "" {
+			t.Errorf("Rows contains a row with an empty Number: %+v", r)
+		}
+	}
+	found := false
+	for _, r := range reply.Rows {
+		if r.Number == "ES-0007" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Rows missing valid row ES-0007; got %+v", reply.Rows)
+	}
+}
