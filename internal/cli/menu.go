@@ -358,10 +358,28 @@ func parseAdvanceAmount(s string) (int64, error) {
 	return cents, nil
 }
 
+// companyBillableForAdvance reports whether a company's billing setup (as
+// reported by InvoiceBalance) is complete enough to issue an advance.
+// GetCompanyForInvoice returns a row for any company that exists by name —
+// it only errors on an unknown name, not on missing billing config — so an
+// existing-but-unconfigured company comes back with a zero-value currency
+// and rate. SetCompanyBilling always sets billing_mode, currency, rate_cents
+// and billed_from together in one statement, so either signal going missing
+// reliably means billing was never (or only partially) configured.
+func companyBillableForAdvance(currency string, rateCents int64) bool {
+	return currency != "" && rateCents > 0
+}
+
 // invoiceAdvanceFlow: pick a company, look up its currency, prompt for a
 // prepayment amount, preview and confirm, then issue the advance and open +
 // reveal the PDF. Confirmation happens before the RPC call because issuing
 // burns an invoice number that is never reclaimed.
+//
+// The billing-config check below happens right after the currency lookup
+// and before the amount prompt: without it, a company that exists but has
+// no currency/rate/sender configured would show a blank "Advance amount ():"
+// prompt, let the operator sit through a full preview + confirm, and only
+// fail once InvoiceAdvance rejects it at the very end.
 func invoiceAdvanceFlow(stdin *bufio.Scanner) {
 	company, ok := pickCompany(stdin)
 	if !ok {
@@ -378,6 +396,12 @@ func invoiceAdvanceFlow(stdin *bufio.Scanner) {
 	client.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	if !companyBillableForAdvance(balance.Currency, balance.RateCents) {
+		fmt.Fprintf(os.Stderr,
+			"company %q has no billing configured (currency, rate, and sender all need to be set) — cannot issue an advance\n",
+			company)
 		return
 	}
 
