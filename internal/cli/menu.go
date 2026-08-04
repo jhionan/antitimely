@@ -342,6 +342,14 @@ func invoiceGenerateFlow(stdin *bufio.Scanner) {
 		return
 	}
 	fmt.Printf("Generated %s — %s\n", reply.Number, reply.PDFPath)
+	// Mirrors invoiceGenerate's post-generate print: without it a
+	// fully-covered period reports a zero total with no explanation of where
+	// the money went.
+	if reply.CreditAppliedCents > 0 {
+		fmt.Printf("Advance applied: %s (remaining %s)\n",
+			invoice.FormatMoney(reply.CreditAppliedCents, reply.Currency),
+			invoice.FormatMoney(reply.CreditRemainingCents, reply.Currency))
+	}
 	openAndReveal(reply.PDFPath)
 }
 

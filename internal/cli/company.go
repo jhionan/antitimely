@@ -68,7 +68,12 @@ func companyList() int {
 }
 
 func companyDelete(args []string) int {
-	fs := flag.NewFlagSet("company delete", flag.ExitOnError)
+	// ContinueOnError, not ExitOnError: reachable from the interactive menu
+	// with raw typed input ("Company name to delete:"), where a name starting
+	// with "-" parses as an unknown flag. ExitOnError would os.Exit(2) out of
+	// the whole menu session; returning 64 keeps the loop alive. The
+	// fs.Parse error is handled just below.
+	fs := flag.NewFlagSet("company delete", flag.ContinueOnError)
 	force := fs.Bool("force", false, "Delete even if the company has invoices (cascades and can vaporise advance credit)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)

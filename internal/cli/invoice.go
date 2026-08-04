@@ -146,7 +146,12 @@ func invoiceList(args []string) int {
 }
 
 func invoiceDelete(args []string) int {
-	fs := flag.NewFlagSet("invoice delete", flag.ExitOnError)
+	// ContinueOnError, not ExitOnError: this is reachable from the
+	// interactive menu with raw typed input ("Invoice ID to delete:"), where
+	// a typo like "-1" parses as an unknown flag. ExitOnError would
+	// os.Exit(2) out of the whole menu session; returning 64 keeps the loop
+	// alive. The fs.Parse error is handled just below.
+	fs := flag.NewFlagSet("invoice delete", flag.ContinueOnError)
 	force := fs.Bool("force", false, "Delete even if the invoice carries advance credit (kind=advance or credit_applied_cents > 0)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
