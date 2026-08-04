@@ -78,6 +78,12 @@ type InvoiceEntry struct {
 	CompanyName string
 	SentAtUnix  int64
 	Note        string
+
+	Number             string // "" if not yet numbered (legacy anchor rows)
+	Kind               string // "hourly" | "advance"
+	TotalCents         int64  // 0 if NULL (legacy anchor rows)
+	CreditAppliedCents int64
+	Currency           string // "" if NULL (legacy anchor rows)
 }
 
 type InvoiceDeleteArgs struct {

@@ -614,17 +614,23 @@ func (q *Queries) LastInvoiceSentForCompany(ctx context.Context, companyID int64
 }
 
 const listAllInvoices = `-- name: ListAllInvoices :many
-SELECT i.id, c.name AS company_name, i.sent_at, i.note
+SELECT i.id, c.name AS company_name, i.sent_at, i.note,
+       i.number, i.kind, i.total_cents, i.credit_applied_cents, i.currency
 FROM invoices i
 JOIN companies c ON c.id = i.company_id
-ORDER BY i.sent_at DESC
+ORDER BY i.sent_at DESC, i.id DESC
 `
 
 type ListAllInvoicesRow struct {
-	ID          int64
-	CompanyName string
-	SentAt      int64
-	Note        string
+	ID                 int64
+	CompanyName        string
+	SentAt             int64
+	Note               string
+	Number             sql.NullString
+	Kind               string
+	TotalCents         sql.NullInt64
+	CreditAppliedCents int64
+	Currency           sql.NullString
 }
 
 func (q *Queries) ListAllInvoices(ctx context.Context) ([]ListAllInvoicesRow, error) {
@@ -641,6 +647,11 @@ func (q *Queries) ListAllInvoices(ctx context.Context) ([]ListAllInvoicesRow, er
 			&i.CompanyName,
 			&i.SentAt,
 			&i.Note,
+			&i.Number,
+			&i.Kind,
+			&i.TotalCents,
+			&i.CreditAppliedCents,
+			&i.Currency,
 		); err != nil {
 			return nil, err
 		}
@@ -688,18 +699,24 @@ func (q *Queries) ListCompanies(ctx context.Context) ([]ListCompaniesRow, error)
 }
 
 const listInvoicesByCompany = `-- name: ListInvoicesByCompany :many
-SELECT i.id, c.name AS company_name, i.sent_at, i.note
+SELECT i.id, c.name AS company_name, i.sent_at, i.note,
+       i.number, i.kind, i.total_cents, i.credit_applied_cents, i.currency
 FROM invoices i
 JOIN companies c ON c.id = i.company_id
 WHERE i.company_id = ?
-ORDER BY i.sent_at DESC
+ORDER BY i.sent_at DESC, i.id DESC
 `
 
 type ListInvoicesByCompanyRow struct {
-	ID          int64
-	CompanyName string
-	SentAt      int64
-	Note        string
+	ID                 int64
+	CompanyName        string
+	SentAt             int64
+	Note               string
+	Number             sql.NullString
+	Kind               string
+	TotalCents         sql.NullInt64
+	CreditAppliedCents int64
+	Currency           sql.NullString
 }
 
 func (q *Queries) ListInvoicesByCompany(ctx context.Context, companyID int64) ([]ListInvoicesByCompanyRow, error) {
@@ -716,6 +733,11 @@ func (q *Queries) ListInvoicesByCompany(ctx context.Context, companyID int64) ([
 			&i.CompanyName,
 			&i.SentAt,
 			&i.Note,
+			&i.Number,
+			&i.Kind,
+			&i.TotalCents,
+			&i.CreditAppliedCents,
+			&i.Currency,
 		); err != nil {
 			return nil, err
 		}

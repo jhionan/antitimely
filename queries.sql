@@ -153,17 +153,19 @@ UPDATE projects SET paused = 0;
 INSERT INTO invoices (company_id, sent_at, note, created_at) VALUES (?, ?, ?, ?) RETURNING id;
 
 -- name: ListInvoicesByCompany :many
-SELECT i.id, c.name AS company_name, i.sent_at, i.note
+SELECT i.id, c.name AS company_name, i.sent_at, i.note,
+       i.number, i.kind, i.total_cents, i.credit_applied_cents, i.currency
 FROM invoices i
 JOIN companies c ON c.id = i.company_id
 WHERE i.company_id = ?
-ORDER BY i.sent_at DESC;
+ORDER BY i.sent_at DESC, i.id DESC;
 
 -- name: ListAllInvoices :many
-SELECT i.id, c.name AS company_name, i.sent_at, i.note
+SELECT i.id, c.name AS company_name, i.sent_at, i.note,
+       i.number, i.kind, i.total_cents, i.credit_applied_cents, i.currency
 FROM invoices i
 JOIN companies c ON c.id = i.company_id
-ORDER BY i.sent_at DESC;
+ORDER BY i.sent_at DESC, i.id DESC;
 
 -- name: DeleteInvoice :exec
 DELETE FROM invoices WHERE id = ?;

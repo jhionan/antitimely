@@ -119,11 +119,28 @@ func invoiceList(args []string) int {
 		fmt.Println("(no invoices)")
 		return 0
 	}
-	fmt.Printf("%-4s  %-20s  %-20s  %s\n", "ID", "COMPANY", "SENT", "NOTE")
+	fmt.Printf("%-4s  %-20s  %-20s  %-9s  %-4s  %-14s  %s\n",
+		"ID", "COMPANY", "SENT", "NUMBER", "KIND", "APPLIED", "NOTE")
 	for _, i := range reply.Items {
-		fmt.Printf("%-4d  %-20s  %-20s  %s\n", i.ID, i.CompanyName,
+		number := i.Number
+		if number == "" {
+			number = "-"
+		}
+		kind := ""
+		if i.Kind == "advance" {
+			kind = "ADV"
+		}
+		applied := "-"
+		if i.CreditAppliedCents > 0 {
+			currency := i.Currency
+			if currency == "" {
+				currency = "?"
+			}
+			applied = invoice.FormatMoney(i.CreditAppliedCents, currency)
+		}
+		fmt.Printf("%-4d  %-20s  %-20s  %-9s  %-4s  %-14s  %s\n", i.ID, i.CompanyName,
 			time.Unix(i.SentAtUnix, 0).Local().Format("2006-01-02 15:04"),
-			i.Note)
+			number, kind, applied, i.Note)
 	}
 	return 0
 }

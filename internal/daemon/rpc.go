@@ -982,6 +982,8 @@ func (s *AntitimelyService) InvoiceList(args rpcapi.InvoiceListArgs, reply *rpca
 		for _, r := range rows {
 			reply.Items = append(reply.Items, rpcapi.InvoiceEntry{
 				ID: r.ID, CompanyName: r.CompanyName, SentAtUnix: r.SentAt, Note: r.Note,
+				Number: r.Number.String, Kind: r.Kind, TotalCents: r.TotalCents.Int64,
+				CreditAppliedCents: r.CreditAppliedCents, Currency: r.Currency.String,
 			})
 		}
 		return nil
@@ -997,6 +999,8 @@ func (s *AntitimelyService) InvoiceList(args rpcapi.InvoiceListArgs, reply *rpca
 	for _, r := range rows {
 		reply.Items = append(reply.Items, rpcapi.InvoiceEntry{
 			ID: r.ID, CompanyName: r.CompanyName, SentAtUnix: r.SentAt, Note: r.Note,
+			Number: r.Number.String, Kind: r.Kind, TotalCents: r.TotalCents.Int64,
+			CreditAppliedCents: r.CreditAppliedCents, Currency: r.Currency.String,
 		})
 	}
 	return nil

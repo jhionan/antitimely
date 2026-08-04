@@ -774,3 +774,24 @@ func TestRPC_CompanyDelete_RefusesWithInvoices(t *testing.T) {
 		t.Fatal("expected a refusal: ON DELETE CASCADE would vaporise the advance")
 	}
 }
+
+func TestRPC_InvoiceList_ShowsKindAndCredit(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	seedHourlyCompanyWithTicks(t, client, db, 1.0)
+	if _, err := db.Exec(`
+		INSERT INTO invoices (company_id, sent_at, created_at, number, total_cents, currency, kind, credit_applied_cents)
+		SELECT id, 100, 100, 'ES-0007', 1462300, 'CAD', 'advance', 0 FROM companies WHERE name='BClouder'`); err != nil {
+		t.Fatal(err)
+	}
+	var reply rpcapi.InvoiceListReply
+	if err := client.Call(rpcapi.ServiceName+".InvoiceList",
+		rpcapi.InvoiceListArgs{CompanyName: "BClouder"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1", len(reply.Items))
+	}
+	if reply.Items[0].Kind != "advance" || reply.Items[0].Number != "ES-0007" {
+		t.Errorf("item = (%q, %q), want (advance, ES-0007)", reply.Items[0].Kind, reply.Items[0].Number)
+	}
+}
