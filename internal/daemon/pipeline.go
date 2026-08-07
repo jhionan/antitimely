@@ -172,7 +172,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	if err != nil {
 		log.Printf("idle: %v", err)
 		if p.perm != nil {
-			p.perm.Set("idle_detection_failed")
+			p.perm.Set("idle_detection_failed", now)
 		}
 	} else {
 		userPresent = idle < p.cfg.IdleThresholdSec
@@ -367,7 +367,7 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 		if errors.Is(err, macos.ErrAccessibilityDenied) {
 			log.Printf("frontmost denied: %v", err)
 			if p.perm != nil {
-				p.perm.Set("accessibility_denied")
+				p.perm.Set("accessibility_denied", now)
 			}
 		} else {
 			log.Printf("frontmost: %v", err)
@@ -394,11 +394,11 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 			p.titleBackoffSec = 0
 			p.titleTimeoutStreak = 0
 			if p.perm != nil {
-				p.perm.Set("ok")
+				p.perm.Set("ok", now)
 			}
 		case errors.Is(terr, macos.ErrAccessibilityDenied):
 			if p.perm != nil {
-				p.perm.Set("accessibility_denied")
+				p.perm.Set("accessibility_denied", now)
 			}
 			p.titleTimeoutStreak = 0
 			log.Printf("title denied; backing off osascript for %ds", p.backOffTitle(now))

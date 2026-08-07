@@ -82,9 +82,9 @@ func (s *AntitimelyService) LatestTick(args rpcapi.LatestTickArgs, reply *rpcapi
 		reply.DaemonUptimeSeconds = time.Now().Unix() - s.StartedAtUnix
 	}
 	if s.Perm != nil {
-		reply.PermissionState = s.Perm.Get()
+		reply.PermissionState = s.Perm.Get(time.Now().Unix())
 	} else {
-		reply.PermissionState = "ok"
+		reply.PermissionState = "unknown"
 	}
 	return nil
 }
@@ -128,9 +128,9 @@ func (s *AntitimelyService) Status(args rpcapi.StatusArgs, reply *rpcapi.StatusR
 	}
 	reply.TickIntervalSeconds = s.TickIntervalSeconds
 	if s.Perm != nil {
-		reply.PermissionState = s.Perm.Get()
+		reply.PermissionState = s.Perm.Get(time.Now().Unix())
 	} else {
-		reply.PermissionState = "ok"
+		reply.PermissionState = "unknown"
 	}
 	if s.StartedAtUnix > 0 {
 		reply.DaemonUptimeSeconds = time.Now().Unix() - s.StartedAtUnix

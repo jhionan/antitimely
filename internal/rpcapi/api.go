@@ -16,7 +16,11 @@ type StatusReply struct {
 	UnassignedSignaturesCount int
 	UserIdleSeconds           int
 	TickIntervalSeconds       int
-	PermissionState           string // "ok" | "accessibility_denied" | "unknown"
+	// "ok" | "accessibility_denied" | "idle_detection_failed" | "unknown".
+	// "unknown" means nothing has been probed recently enough to say: the
+	// state is only written while an allowlisted app is frontmost, so it goes
+	// stale whenever the user is working somewhere the daemon cannot watch.
+	PermissionState string
 
 	// New grouped fields:
 	TodayTotalSeconds         int64           // sum of all project ticks today (distinct ts)

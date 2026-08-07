@@ -145,7 +145,8 @@ func renderWarning(w io.Writer, reply rpcapi.StatusReply) {
 		"  Warning: Window-title capture disabled. Grant antitimely BOTH:\n"+
 			"    - Privacy & Security -> Accessibility (required for Electron/JVM apps: VS Code, Antigravity, JetBrains, ...)\n"+
 			"    - Privacy & Security -> Automation -> antitimely -> System Events\n"+
-			"  Then restart the daemon (make rebuild). A rebuild can reset these grants.")
+			"  Then run `atl restart` — a grant only applies to a freshly started\n"+
+			"  daemon, and restarting is enough (no rebuild required).")
 }
 
 // fmtDuration formats a duration in seconds as "1h2m3s", or "0s" for zero.

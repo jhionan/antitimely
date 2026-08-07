@@ -864,7 +864,8 @@ func TestRPC_LatestTick(t *testing.T) {
 	ctx := context.Background()
 	q := store.New(db)
 
-	// No ticks yet → 0; Perm is nil in the test service → "ok".
+	// No ticks yet → 0; Perm is nil in the test service, and an unwired
+	// tracker has probed nothing, so it must not claim a state.
 	var empty rpcapi.LatestTickReply
 	if err := client.Call(rpcapi.ServiceName+".LatestTick", rpcapi.LatestTickArgs{}, &empty); err != nil {
 		t.Fatalf("LatestTick (empty): %v", err)
@@ -872,8 +873,8 @@ func TestRPC_LatestTick(t *testing.T) {
 	if empty.LatestTickUnix != 0 {
 		t.Errorf("LatestTickUnix with no ticks = %d, want 0", empty.LatestTickUnix)
 	}
-	if empty.PermissionState != "ok" {
-		t.Errorf("PermissionState = %q, want \"ok\"", empty.PermissionState)
+	if empty.PermissionState != "unknown" {
+		t.Errorf("PermissionState = %q, want \"unknown\"", empty.PermissionState)
 	}
 
 	obsID, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{

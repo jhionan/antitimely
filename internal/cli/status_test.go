@@ -80,6 +80,22 @@ func TestRenderWarningOnlyWhenDenied(t *testing.T) {
 	}
 }
 
+// A new grant is applied by restarting the daemon, not by rebuilding it.
+// `make rebuild` recompiles first, which is both slower and — before the
+// Makefile gained a stable SIGN_ID — what used to invalidate the grant the
+// user had just given. The remediation text must not send them there.
+func TestRenderWarningRecommendsRestartNotRebuild(t *testing.T) {
+	var buf bytes.Buffer
+	renderWarning(&buf, rpcapi.StatusReply{PermissionState: "accessibility_denied"})
+	out := buf.String()
+	if !strings.Contains(out, "atl restart") {
+		t.Errorf("warning should point at `atl restart`, got:\n%s", out)
+	}
+	if strings.Contains(out, "make rebuild") {
+		t.Errorf("warning must not recommend `make rebuild`, got:\n%s", out)
+	}
+}
+
 func TestRenderFooter(t *testing.T) {
 	var buf bytes.Buffer
 	renderFooter(&buf, time.Date(2026, 6, 25, 20, 36, 1, 0, time.Local))

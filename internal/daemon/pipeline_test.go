@@ -256,7 +256,7 @@ func TestPipeline_IdleError_FailsOpen(t *testing.T) {
 	// signal handler overwrites permission state back to "ok" — exercising
 	// the recovery path. The important thing is that focus tracking ran
 	// at all.
-	if got := pt.Get(); got != "ok" {
+	if got := pt.Get(1000); got != "ok" {
 		t.Errorf("permission state = %q, want ok (post-success)", got)
 	}
 }
@@ -278,7 +278,7 @@ func TestPipeline_IdleError_SurfacedWhenFrontmostFails(t *testing.T) {
 	if err := p.RunTick(ctx, 1000); err != nil {
 		t.Fatalf("RunTick: %v", err)
 	}
-	if got := pt.Get(); got != "idle_detection_failed" {
+	if got := pt.Get(1000); got != "idle_detection_failed" {
 		t.Errorf("permission state = %q, want idle_detection_failed", got)
 	}
 }
