@@ -120,6 +120,15 @@ spawns — all carry the pane's id.
 - **`domain.Signal`** gains `SpaceID string`; **`domain.RuleSpec`** gains
   `MatchSpaceID *string`.
 
+The agent pipeline's **tracking pre-filter must change in step**. `collectAgentSignals`
+only emits a signal when `procClass.track` is true, and `track` is computed from
+`CacheSnapshot.CwdPrefixes` via `cwdUnderAnyPrefix`, whose comment states the upstream
+"is this dir tracked?" decision and the downstream "does rule X apply?" decision must never
+disagree. That field becomes `CwdPatterns` (holding literals and globs alike, matched with
+`MatchesCwd`), and a new `BoundSpaceIDs` set makes a process in a rule-bound space tracked
+even when its cwd matches no pattern. Without both, a glob or space rule would match
+nothing, because the process would never produce a signal at all.
+
 ### 3. Data model and migration
 
 - **`observations`** gains `space_id TEXT NOT NULL DEFAULT ''`, **added to the UNIQUE key**:
