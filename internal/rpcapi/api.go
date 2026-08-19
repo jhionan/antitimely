@@ -266,10 +266,22 @@ type Rule struct {
 	MatchTitleSubstr string
 	MatchBinaryName  string
 	MatchCWDPrefix   string
+	MatchSpaceID     string
 }
 
 type RuleDeleteArgs struct{ ID int64 }
 type RuleDeleteReply struct{}
+
+type RuleAddArgs struct {
+	ProjectName      string
+	Priority         int64
+	MatchBundleID    string
+	MatchTitleSubstr string
+	MatchBinaryName  string
+	MatchCWDPrefix   string
+	MatchSpaceID     string
+}
+type RuleAddReply struct{ ID int64 }
 
 // --- Reporting ---
 

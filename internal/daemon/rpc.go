@@ -771,6 +771,7 @@ func (s *AntitimelyService) RulesList(args rpcapi.RulesListArgs, reply *rpcapi.R
 			MatchTitleSubstr: r.MatchTitleSubstr.String,
 			MatchBinaryName:  r.MatchBinaryName.String,
 			MatchCWDPrefix:   r.MatchCwdPrefix.String,
+			MatchSpaceID:     r.MatchSpaceID.String,
 		})
 	}
 	return nil
@@ -783,6 +784,33 @@ func (s *AntitimelyService) RuleDelete(args rpcapi.RuleDeleteArgs, reply *rpcapi
 	if err := s.Q.DeleteRule(ctx, args.ID); err != nil {
 		return err
 	}
+	return s.ReloadCache()
+}
+
+// RuleAdd creates a rule directly (no retroactive retag — unlike
+// TagSignature, this is not tied to a specific observation). It reloads the
+// cache so the rule takes effect immediately, without requiring a SIGHUP.
+func (s *AntitimelyService) RuleAdd(args rpcapi.RuleAddArgs, reply *rpcapi.RuleAddReply) error {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	proj, err := s.Q.GetProjectByName(ctx, args.ProjectName)
+	if err != nil {
+		return fmt.Errorf("project %q: %w", args.ProjectName, err)
+	}
+	id, err := s.Q.AddRule(ctx, store.AddRuleParams{
+		ProjectID:        proj.ID,
+		Priority:         args.Priority,
+		MatchBundleID:    nullStr(args.MatchBundleID),
+		MatchTitleSubstr: nullStr(args.MatchTitleSubstr),
+		MatchBinaryName:  nullStr(args.MatchBinaryName),
+		MatchCwdPrefix:   nullStr(args.MatchCWDPrefix),
+		MatchSpaceID:     nullStr(args.MatchSpaceID),
+		CreatedAt:        time.Now().Unix(),
+	})
+	if err != nil {
+		return err
+	}
+	reply.ID = id
 	return s.ReloadCache()
 }
 

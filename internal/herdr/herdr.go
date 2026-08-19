@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +98,19 @@ func (r *Resolver) SpaceForSession(uuid string) (Space, bool) {
 	}
 	s, ok := r.spaces[wid]
 	return s, ok
+}
+
+// Spaces returns every known workspace, ordered by id.
+func (r *Resolver) Spaces() []Space {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reloadLocked()
+	out := make([]Space, 0, len(r.spaces))
+	for _, s := range r.spaces {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // reloadLocked re-parses the file when it has changed. If session.json is
