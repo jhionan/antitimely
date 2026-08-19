@@ -67,8 +67,8 @@ func (q *Queries) AddProject(ctx context.Context, arg AddProjectParams) (int64, 
 }
 
 const addRule = `-- name: AddRule :one
-INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
@@ -79,6 +79,7 @@ type AddRuleParams struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 	CreatedAt        int64
 }
 
@@ -90,6 +91,7 @@ func (q *Queries) AddRule(ctx context.Context, arg AddRuleParams) (int64, error)
 		arg.MatchTitleSubstr,
 		arg.MatchBinaryName,
 		arg.MatchCwdPrefix,
+		arg.MatchSpaceID,
 		arg.CreatedAt,
 	)
 	var id int64
@@ -135,7 +137,13 @@ WHERE project_id IS NULL
       WHERE (? IS NULL OR bundle_id = ?)
         AND (? IS NULL OR window_title LIKE '%' || ? || '%')
         AND (? IS NULL OR binary_name = ?)
-        AND (? IS NULL OR cwd LIKE ? || '%')
+        AND (? IS NULL OR space_id = ?)
+        AND (? IS NULL OR CASE WHEN rtrim(?, '/') = ''
+                               THEN 0
+                               WHEN instr(?, '*') > 0
+                                    THEN (cwd GLOB rtrim(?, '/') OR cwd GLOB rtrim(?, '/') || '/*')
+                               ELSE (cwd = rtrim(?, '/') OR substr(cwd, 1, length(rtrim(?, '/')) + 1) = rtrim(?, '/') || '/')
+                          END)
   )
 `
 
@@ -148,7 +156,15 @@ type ApplyRuleRetroactivelyCountedParams struct {
 	Column6    interface{}
 	BinaryName string
 	Column8    interface{}
-	Column9    sql.NullString
+	SpaceID    string
+	Column10   interface{}
+	RTRIM      string
+	INSTR      string
+	RTRIM_2    string
+	RTRIM_3    string
+	RTRIM_4    string
+	RTRIM_5    string
+	RTRIM_6    string
 }
 
 func (q *Queries) ApplyRuleRetroactivelyCounted(ctx context.Context, arg ApplyRuleRetroactivelyCountedParams) (int64, error) {
@@ -161,7 +177,15 @@ func (q *Queries) ApplyRuleRetroactivelyCounted(ctx context.Context, arg ApplyRu
 		arg.Column6,
 		arg.BinaryName,
 		arg.Column8,
-		arg.Column9,
+		arg.SpaceID,
+		arg.Column10,
+		arg.RTRIM,
+		arg.INSTR,
+		arg.RTRIM_2,
+		arg.RTRIM_3,
+		arg.RTRIM_4,
+		arg.RTRIM_5,
+		arg.RTRIM_6,
 	)
 	if err != nil {
 		return 0, err
@@ -442,7 +466,7 @@ func (q *Queries) GetInvoiceByID(ctx context.Context, id int64) (Invoice, error)
 }
 
 const getObservation = `-- name: GetObservation :one
-SELECT id, source, bundle_id, window_title, binary_name, cwd, first_seen
+SELECT id, source, bundle_id, window_title, binary_name, cwd, space_id, first_seen
 FROM observations
 WHERE id = ?
 `
@@ -457,6 +481,7 @@ func (q *Queries) GetObservation(ctx context.Context, id int64) (Observation, er
 		&i.WindowTitle,
 		&i.BinaryName,
 		&i.Cwd,
+		&i.SpaceID,
 		&i.FirstSeen,
 	)
 	return i, err
@@ -877,7 +902,7 @@ func (q *Queries) ListProjectsWithCompany(ctx context.Context) ([]ListProjectsWi
 
 const listRules = `-- name: ListRules :many
 SELECT r.id, p.name AS project_name, r.priority,
-       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix
+       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix, r.match_space_id
 FROM rules r
 JOIN projects p ON p.id = r.project_id
 ORDER BY r.priority, r.id
@@ -891,6 +916,7 @@ type ListRulesRow struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 }
 
 func (q *Queries) ListRules(ctx context.Context) ([]ListRulesRow, error) {
@@ -910,6 +936,7 @@ func (q *Queries) ListRules(ctx context.Context) ([]ListRulesRow, error) {
 			&i.MatchTitleSubstr,
 			&i.MatchBinaryName,
 			&i.MatchCwdPrefix,
+			&i.MatchSpaceID,
 		); err != nil {
 			return nil, err
 		}
@@ -926,7 +953,7 @@ func (q *Queries) ListRules(ctx context.Context) ([]ListRulesRow, error) {
 
 const listRulesForCache = `-- name: ListRulesForCache :many
 SELECT id, project_id, priority,
-       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix
+       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id
 FROM rules
 ORDER BY priority, id
 `
@@ -939,6 +966,7 @@ type ListRulesForCacheRow struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 }
 
 func (q *Queries) ListRulesForCache(ctx context.Context) ([]ListRulesForCacheRow, error) {
@@ -958,6 +986,7 @@ func (q *Queries) ListRulesForCache(ctx context.Context) ([]ListRulesForCacheRow
 			&i.MatchTitleSubstr,
 			&i.MatchBinaryName,
 			&i.MatchCwdPrefix,
+			&i.MatchSpaceID,
 		); err != nil {
 			return nil, err
 		}
@@ -1031,7 +1060,7 @@ func (q *Queries) PauseAllProjects(ctx context.Context) (int64, error) {
 }
 
 const pendingReviewSignatures = `-- name: PendingReviewSignatures :many
-SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd,
+SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd, o.space_id,
        COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
 FROM observations o
 JOIN ticks t ON t.observation_id = o.id
@@ -1049,6 +1078,7 @@ type PendingReviewSignaturesRow struct {
 	WindowTitle string
 	BinaryName  string
 	Cwd         string
+	SpaceID     string
 	Ticks       int64
 	LastSeen    interface{}
 }
@@ -1069,6 +1099,7 @@ func (q *Queries) PendingReviewSignatures(ctx context.Context, limit int64) ([]P
 			&i.WindowTitle,
 			&i.BinaryName,
 			&i.Cwd,
+			&i.SpaceID,
 			&i.Ticks,
 			&i.LastSeen,
 		); err != nil {
@@ -1311,9 +1342,9 @@ func (q *Queries) UnassignedTicksInRange(ctx context.Context, arg UnassignedTick
 }
 
 const upsertObservation = `-- name: UpsertObservation :one
-INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, first_seen)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT (source, bundle_id, window_title, binary_name, cwd)
+INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, space_id, first_seen)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (source, bundle_id, window_title, binary_name, cwd, space_id)
 DO UPDATE SET id = id
 RETURNING id
 `
@@ -1324,6 +1355,7 @@ type UpsertObservationParams struct {
 	WindowTitle string
 	BinaryName  string
 	Cwd         string
+	SpaceID     string
 	FirstSeen   int64
 }
 
@@ -1334,6 +1366,7 @@ func (q *Queries) UpsertObservation(ctx context.Context, arg UpsertObservationPa
 		arg.WindowTitle,
 		arg.BinaryName,
 		arg.Cwd,
+		arg.SpaceID,
 		arg.FirstSeen,
 	)
 	var id int64

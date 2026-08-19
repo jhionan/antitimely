@@ -18,11 +18,16 @@ type CacheSnapshot struct {
 	PausedProjectIDs map[int64]bool // project_id -> paused
 	ArmedProjects    map[int64]bool // project_id -> armed (needs focus before agent ticks count)
 
-	// CwdPrefixes is the deduplicated set of cwd prefixes drawn from Rules
-	// (trailing slash stripped). Built once per ReloadCache so the agent
-	// pipeline can widen the binary allowlist by tracked-directory match
-	// without rewalking Rules every tick.
-	CwdPrefixes []string
+	// CwdPatterns is the deduplicated set of cwd match values drawn from Rules
+	// (literal prefixes and globs alike, verbatim — MatchesCwd handles trailing
+	// slashes). Built once per ReloadCache so the agent pipeline can widen the
+	// binary allowlist by tracked-directory match without rewalking Rules.
+	CwdPatterns []string
+
+	// BoundSpaceIDs is the set of herdr workspace ids referenced by any rule.
+	// A process in a bound space is tracked even when its cwd matches no
+	// pattern — that is the whole point of space attribution.
+	BoundSpaceIDs map[string]bool
 }
 
 // Cache holds the current snapshot with lock-free read access.
@@ -46,6 +51,7 @@ func NewCache() *Cache {
 		Rules:            nil,
 		PausedProjectIDs: map[int64]bool{},
 		ArmedProjects:    map[int64]bool{},
+		BoundSpaceIDs:    map[string]bool{},
 	})
 	return c
 }

@@ -46,6 +46,7 @@ type Observation struct {
 	WindowTitle string
 	BinaryName  string
 	Cwd         string
+	SpaceID     string
 	FirstSeen   int64
 }
 
@@ -65,6 +66,7 @@ type Rule struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 	CreatedAt        int64
 }
 

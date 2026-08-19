@@ -228,8 +228,13 @@ type Signature struct {
 	WindowTitle   string
 	BinaryName    string
 	CWD           string
-	Ticks         int64
-	LastSeenUnix  int64
+	// SpaceID is the herdr workspace the signal came from, "" for work not
+	// under herdr. Observations fork by space, so two rows that are
+	// otherwise byte-identical can appear for the same cwd in different
+	// spaces; `atl review` must show this or the two are indistinguishable.
+	SpaceID      string
+	Ticks        int64
+	LastSeenUnix int64
 }
 
 type TagSignatureArgs struct {
@@ -266,10 +271,22 @@ type Rule struct {
 	MatchTitleSubstr string
 	MatchBinaryName  string
 	MatchCWDPrefix   string
+	MatchSpaceID     string
 }
 
 type RuleDeleteArgs struct{ ID int64 }
 type RuleDeleteReply struct{}
+
+type RuleAddArgs struct {
+	ProjectName      string
+	Priority         int64
+	MatchBundleID    string
+	MatchTitleSubstr string
+	MatchBinaryName  string
+	MatchCWDPrefix   string
+	MatchSpaceID     string
+}
+type RuleAddReply struct{ ID int64 }
 
 // --- Reporting ---
 

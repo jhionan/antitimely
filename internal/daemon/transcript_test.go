@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rian/antitimely/internal/domain"
+	"github.com/rian/antitimely/internal/herdr"
 )
 
 func TestDecodeProjectDir(t *testing.T) {
@@ -60,8 +61,8 @@ func newTranscriptPipeline(t *testing.T, root string, graceSec int, prefixes []s
 	t.Helper()
 	cache := NewCache()
 	// Install a snapshot carrying the cwd prefixes (no rules needed; the
-	// collector only consults CwdPrefixes).
-	cache.Store(&CacheSnapshot{CwdPrefixes: prefixes})
+	// collector only consults CwdPatterns).
+	cache.Store(&CacheSnapshot{CwdPatterns: prefixes})
 	p := NewPipeline(nil, nil, cache, PipelineConfig{
 		TranscriptTracking: true,
 		TranscriptRoot:     root,
@@ -108,5 +109,41 @@ func TestCollectTranscript_CwdNotTracked(t *testing.T) {
 
 	if sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now); len(sigs) != 0 {
 		t.Fatalf("got %d signals, want 0 (untracked cwd)", len(sigs))
+	}
+}
+
+// TestCollectTranscript_SpaceBoundAdmitsWithoutCwdMatch is the regression
+// test for the transcript gate's space clause: a session whose cwd matches no
+// CwdPatterns entry must still be admitted (and carry its SpaceID) when the
+// session's herdr space is in BoundSpaceIDs. Without this, a space-only-bound
+// project silently loses every transcript signal — a low-CPU Claude session
+// would never bill and could never resume a paused project.
+func TestCollectTranscript_SpaceBoundAdmitsWithoutCwdMatch(t *testing.T) {
+	root := t.TempDir()
+	now := int64(1782268300)
+	// cwd deliberately does not match any CwdPatterns entry configured below.
+	body := `{"cwd":"/work/other","timestamp":"2026-06-24T02:30:29Z"}` + "\n"
+	// Resolves to space "wN" per herdr/testdata/session.json.
+	const sessionID = "bbbbbbbb-1111-1111-1111-111111111111"
+	writeSession(t, root, "-work-other", sessionID, body)
+
+	cache := NewCache()
+	cache.Store(&CacheSnapshot{
+		CwdPatterns:   []string{"/work/daas"}, // does not cover /work/other
+		BoundSpaceIDs: map[string]bool{"wN": true},
+	})
+	p := NewPipeline(nil, nil, cache, PipelineConfig{
+		TranscriptTracking: true,
+		TranscriptRoot:     root,
+		TranscriptGraceSec: 600,
+	})
+	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
+
+	sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now)
+	if len(sigs) != 1 {
+		t.Fatalf("got %d signals, want 1 (space-bound must admit despite no cwd match)", len(sigs))
+	}
+	if sigs[0].SpaceID != "wN" {
+		t.Fatalf("SpaceID = %q, want %q", sigs[0].SpaceID, "wN")
 	}
 }

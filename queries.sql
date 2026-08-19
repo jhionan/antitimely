@@ -1,7 +1,7 @@
 -- name: UpsertObservation :one
-INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, first_seen)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT (source, bundle_id, window_title, binary_name, cwd)
+INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, space_id, first_seen)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (source, bundle_id, window_title, binary_name, cwd, space_id)
 DO UPDATE SET id = id
 RETURNING id;
 
@@ -24,7 +24,7 @@ FROM ticks
 WHERE project_id IS NULL AND ts >= ? AND ts < ?;
 
 -- name: PendingReviewSignatures :many
-SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd,
+SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd, o.space_id,
        COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
 FROM observations o
 JOIN ticks t ON t.observation_id = o.id
@@ -66,20 +66,20 @@ ORDER BY p.name;
 DELETE FROM projects WHERE name = ?;
 
 -- name: AddRule :one
-INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: ListRules :many
 SELECT r.id, p.name AS project_name, r.priority,
-       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix
+       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix, r.match_space_id
 FROM rules r
 JOIN projects p ON p.id = r.project_id
 ORDER BY r.priority, r.id;
 
 -- name: ListRulesForCache :many
 SELECT id, project_id, priority,
-       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix
+       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id
 FROM rules
 ORDER BY priority, id;
 
@@ -92,7 +92,7 @@ VALUES (?, ?)
 ON CONFLICT (observation_id) DO NOTHING;
 
 -- name: GetObservation :one
-SELECT id, source, bundle_id, window_title, binary_name, cwd, first_seen
+SELECT id, source, bundle_id, window_title, binary_name, cwd, space_id, first_seen
 FROM observations
 WHERE id = ?;
 
@@ -105,7 +105,13 @@ WHERE project_id IS NULL
       WHERE (? IS NULL OR bundle_id = ?)
         AND (? IS NULL OR window_title LIKE '%' || ? || '%')
         AND (? IS NULL OR binary_name = ?)
-        AND (? IS NULL OR cwd LIKE ? || '%')
+        AND (? IS NULL OR space_id = ?)
+        AND (? IS NULL OR CASE WHEN rtrim(?, '/') = ''
+                               THEN 0
+                               WHEN instr(?, '*') > 0
+                                    THEN (cwd GLOB rtrim(?, '/') OR cwd GLOB rtrim(?, '/') || '/*')
+                               ELSE (cwd = rtrim(?, '/') OR substr(cwd, 1, length(rtrim(?, '/')) + 1) = rtrim(?, '/') || '/')
+                          END)
   );
 
 -- name: RetagSingleObservation :exec

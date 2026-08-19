@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -238,6 +239,78 @@ func TestRPC_RulesListDelete(t *testing.T) {
 	_ = client.Call(rpcapi.ServiceName+".RulesList", rpcapi.RulesListArgs{}, &listAfterDelete)
 	if len(listAfterDelete.Items) != 0 {
 		t.Errorf("after delete: %d items", len(listAfterDelete.Items))
+	}
+}
+
+// TestRPC_RuleAdd covers the RuleAdd handler added for `atl rules add`:
+// direct rule creation (unlike TagSignature, not tied to an observation).
+func TestRPC_RuleAdd(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "MD-Tracker", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A space-only rule (no cwd/bundle/title/binary) must be accepted: the
+	// rules table's CHECK constraint was widened specifically to permit a
+	// rule whose only match field is match_space_id, and nothing else in
+	// this suite proves that end to end through the RPC layer.
+	var reply rpcapi.RuleAddReply
+	if err := client.Call(rpcapi.ServiceName+".RuleAdd", rpcapi.RuleAddArgs{
+		ProjectName:  "MD-Tracker",
+		Priority:     100,
+		MatchSpaceID: "wN",
+	}, &reply); err != nil {
+		t.Fatalf("RuleAdd (space-only): %v", err)
+	}
+	if reply.ID == 0 {
+		t.Fatal("expected a nonzero rule id")
+	}
+
+	var storedSpace sql.NullString
+	row := db.QueryRow(`SELECT match_space_id FROM rules WHERE id = ?`, reply.ID)
+	if err := row.Scan(&storedSpace); err != nil {
+		t.Fatal(err)
+	}
+	if !storedSpace.Valid || storedSpace.String != "wN" {
+		t.Errorf("stored match_space_id = %+v, want wN", storedSpace)
+	}
+
+	// The new rule must be visible in the cache snapshot immediately, with
+	// no SIGHUP / separate ReloadCache call — that's what RuleAdd calling
+	// ReloadCache itself before returning is for. Assert against the
+	// snapshot, not just the database: that's the behaviour users depend on.
+	found := false
+	for _, r := range cache.Snapshot().Rules {
+		if r.ID == reply.ID {
+			found = true
+			if r.MatchSpaceID == nil || *r.MatchSpaceID != "wN" {
+				t.Errorf("cached rule MatchSpaceID = %v, want wN", r.MatchSpaceID)
+			}
+		}
+	}
+	if !found {
+		t.Error("new rule not present in cache snapshot right after RuleAdd (ReloadCache did not run)")
+	}
+
+	// An unknown project must error and create nothing.
+	var badReply rpcapi.RuleAddReply
+	err := client.Call(rpcapi.ServiceName+".RuleAdd", rpcapi.RuleAddArgs{
+		ProjectName:   "NoSuchProject",
+		Priority:      100,
+		MatchBundleID: "com.test.foo",
+	}, &badReply)
+	if err == nil {
+		t.Fatalf("expected an error for an unknown project, got nil (id=%d)", badReply.ID)
+	}
+
+	var count int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rules WHERE match_bundle_id = 'com.test.foo'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected no rule created for the unknown project, found %d", count)
 	}
 }
 
@@ -806,6 +879,62 @@ func TestRPC_ReloadCache_PreservesArmedProjects(t *testing.T) {
 	}
 }
 
+// TestRPC_ReloadCache_PopulatesSpaceID guards the wiring in ReloadCache that
+// turns a rule's stored match_space_id column into both
+// domain.RuleSpec.MatchSpaceID (so MatchRules can evaluate the clause) and
+// CacheSnapshot.BoundSpaceIDs (so the agent/transcript pipelines can track a
+// process in a bound space even without a cwd match). Deleting either half of
+// that wiring leaves the rest of the suite green while the whole space
+// attribution feature goes silently inert — this is the regression test for
+// exactly that failure mode.
+func TestRPC_ReloadCache_PopulatesSpaceID(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "space-bound", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	const wantSpace = "wN"
+	if _, err := q.AddRule(ctx, store.AddRuleParams{
+		ProjectID:    projID,
+		Priority:     50,
+		MatchSpaceID: sql.NullString{String: wantSpace, Valid: true},
+		CreatedAt:    1000,
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	// Trigger a cache reload (WatchAdd calls ReloadCache as a side effect;
+	// same pattern as TestRPC_ReloadCache_PreservesArmedProjects above).
+	if err := client.Call(rpcapi.ServiceName+".WatchAdd",
+		rpcapi.WatchAddArgs{Kind: "bundle", Identifier: "com.space.test"},
+		&rpcapi.WatchAddReply{}); err != nil {
+		t.Fatalf("WatchAdd: %v", err)
+	}
+
+	snap := cache.Snapshot()
+
+	var found bool
+	for _, r := range snap.Rules {
+		if r.ProjectID != projID {
+			continue
+		}
+		found = true
+		if r.MatchSpaceID == nil || *r.MatchSpaceID != wantSpace {
+			t.Errorf("rule.MatchSpaceID = %v, want %q", r.MatchSpaceID, wantSpace)
+		}
+	}
+	if !found {
+		t.Fatalf("rule for project %d not found in snapshot.Rules: %+v", projID, snap.Rules)
+	}
+
+	if !snap.BoundSpaceIDs[wantSpace] {
+		t.Errorf("BoundSpaceIDs = %v, want it to contain %q", snap.BoundSpaceIDs, wantSpace)
+	}
+}
+
 func TestRPC_ProjectAdd_ArmsNewProject(t *testing.T) {
 	client, _, cache := setupRPCServer(t)
 
@@ -891,5 +1020,190 @@ func TestRPC_LatestTick(t *testing.T) {
 	}
 	if reply.LatestTickUnix != 2010 {
 		t.Errorf("LatestTickUnix = %d, want 2010 (max of inserted ts)", reply.LatestTickUnix)
+	}
+}
+
+// TestRPC_TagSignature_RetroSweepCannotCrossSpaces is the regression test for
+// `atl review` being space-blind. Observations fork by space, so two rows
+// that look identical in the review list can exist for the same cwd in two
+// herdr spaces — which is exactly the case this feature exists to separate
+// (two spaces, same working directory, two different clients). Tagging one of
+// them creates a cwd-only rule; with the retroactive sweep's space clause
+// hard-wired to don't-care, that rule swept BOTH spaces' unassigned ticks
+// into one project and silently billed the other client's time to it.
+func TestRPC_TagSignature_RetroSweepCannotCrossSpaces(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	const cwd = "/Users/rian/work/shared-repo"
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "client-a", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	obsA, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd, SpaceID: "wN", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obsB, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd, SpaceID: "wM", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obsA == obsB {
+		t.Fatal("same cwd in two spaces must be two observations")
+	}
+	for _, ts := range []int64{2000, 2005} {
+		if err := q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsA}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ts := range []int64{3000, 3005, 3010} {
+		if err := q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsB}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var reply rpcapi.TagSignatureReply
+	if err := client.Call(rpcapi.ServiceName+".TagSignature", rpcapi.TagSignatureArgs{
+		ObservationID: obsA,
+		ProjectName:   "client-a",
+		Rule: &rpcapi.ProposedRule{
+			Priority:        100,
+			MatchBinaryName: "claude",
+			MatchCWDPrefix:  cwd,
+		},
+	}, &reply); err != nil {
+		t.Fatalf("TagSignature: %v", err)
+	}
+	if reply.TicksRetagged != 2 {
+		t.Errorf("TicksRetagged = %d, want 2 (only the tagged space's ticks)", reply.TicksRetagged)
+	}
+
+	var stillUnassigned int
+	row := db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE observation_id = ? AND project_id IS NULL`, obsB)
+	if err := row.Scan(&stillUnassigned); err != nil {
+		t.Fatal(err)
+	}
+	if stillUnassigned != 3 {
+		t.Fatalf("the other space's ticks must stay unassigned, got %d of 3 still unassigned - "+
+			"the retroactive sweep crossed spaces and billed another client's time", stillUnassigned)
+	}
+}
+
+// TestRPC_TagSignature_SpacelessObservationStillSweepsEverything pins the
+// other half of the constraint: work outside herdr has an empty space_id,
+// and for those the sweep must stay space-agnostic, exactly as it behaved before
+// spaces existed. A too-eager space clause here would quietly stop retagging
+// history for every non-herdr signature.
+func TestRPC_TagSignature_SpacelessObservationStillSweepsEverything(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	const cwd = "/Users/rian/work/plain-repo"
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "plain", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	obs1, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd, FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs2, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd + "/sub", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.InsertTick(ctx, store.InsertTickParams{Ts: 2000, ObservationID: obs1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.InsertTick(ctx, store.InsertTickParams{Ts: 2005, ObservationID: obs2}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.TagSignatureReply
+	if err := client.Call(rpcapi.ServiceName+".TagSignature", rpcapi.TagSignatureArgs{
+		ObservationID: obs1,
+		ProjectName:   "plain",
+		Rule: &rpcapi.ProposedRule{
+			Priority:        100,
+			MatchBinaryName: "claude",
+			MatchCWDPrefix:  cwd,
+		},
+	}, &reply); err != nil {
+		t.Fatalf("TagSignature: %v", err)
+	}
+	if reply.TicksRetagged != 2 {
+		t.Fatalf("TicksRetagged = %d, want 2: a spaceless observation must keep the "+
+			"space clause don't-care and retag all matching history", reply.TicksRetagged)
+	}
+}
+
+// TestRPC_PendingReview_CarriesSpaceID pins the review queue's space column
+// end to end: without it two rows for the same cwd in different spaces are
+// indistinguishable in `atl review`, and the user cannot tell which client
+// they are tagging.
+func TestRPC_PendingReview_CarriesSpaceID(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	obsID, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/Users/rian/work/x", SpaceID: "wN", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.InsertTick(ctx, store.InsertTickParams{Ts: 2000, ObservationID: obsID}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.PendingReviewReply
+	if err := client.Call(rpcapi.ServiceName+".PendingReview", rpcapi.PendingReviewArgs{Limit: 10}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Signatures) != 1 {
+		t.Fatalf("want 1 pending signature, got %d", len(reply.Signatures))
+	}
+	if reply.Signatures[0].SpaceID != "wN" {
+		t.Fatalf("SpaceID = %q, want %q", reply.Signatures[0].SpaceID, "wN")
+	}
+}
+
+// TestRPC_RuleAdd_RejectsInvalidCwdPattern pins that cwd-pattern validation
+// lives at the RPC boundary, not only in the CLI: any other caller could
+// otherwise store a pattern whose live matcher and retroactive SQL disagree.
+func TestRPC_RuleAdd_RejectsInvalidCwdPattern(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "MD-Tracker", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.RuleAddReply
+	err := client.Call(rpcapi.ServiceName+".RuleAdd", rpcapi.RuleAddArgs{
+		ProjectName:    "MD-Tracker",
+		Priority:       100,
+		MatchCWDPrefix: "/a/*/md-x",
+	}, &reply)
+	if err == nil {
+		t.Fatal("RuleAdd must reject a '*' that is not the final character of the pattern")
+	}
+	if !strings.Contains(err.Error(), "final character") {
+		t.Fatalf("expected the ValidateCwdPattern error, got %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rules`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("a rejected rule must not be stored, found %d rules", n)
 	}
 }

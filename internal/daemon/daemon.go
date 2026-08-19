@@ -19,6 +19,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/rian/antitimely/internal/herdr"
 	"github.com/rian/antitimely/internal/macos"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
@@ -78,6 +79,19 @@ var invoiceCreditMigrations = []string{
 }
 
 // Run boots the daemon and blocks until SIGINT/SIGTERM.
+// newDaemonPipeline builds the Pipeline the daemon actually runs. It exists
+// so that the one line switching herdr space attribution ON in production —
+// pointing the resolver at the real session.json — is reachable from a test.
+// NewPipeline deliberately defaults to a resolver with an empty path (it
+// resolves nothing, so tests need no herdr state), which means dropping this
+// wiring would silently disable space attribution with every test still
+// green. TestDaemonPipelineUsesRealHerdrSessionPath is that assertion.
+func newDaemonPipeline(q *store.Queries, bridge macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
+	p := NewPipeline(q, bridge, cache, cfg)
+	p.herdr = herdr.NewResolver(herdr.DefaultSessionPath())
+	return p
+}
+
 func Run(cfg Config, schemaSQL string) error {
 	if schemaSQL == "" {
 		return errors.New("schema is empty")
@@ -122,6 +136,12 @@ func Run(cfg Config, schemaSQL string) error {
 	if err := migrateObservationsSourceCheck(db); err != nil {
 		return fmt.Errorf("migrate observations source: %w", err)
 	}
+	if err := migrateObservationsSpaceID(db); err != nil {
+		return fmt.Errorf("migrate observations space_id: %w", err)
+	}
+	if err := migrateRulesSpaceID(db); err != nil {
+		return fmt.Errorf("migrate rules match_space_id: %w", err)
+	}
 
 	bridge := &macos.RealBridge{}
 	cache := NewCache()
@@ -150,7 +170,7 @@ func Run(cfg Config, schemaSQL string) error {
 			autoDisarmTicks = n
 		}
 	}
-	pipeline := NewPipeline(q, bridge, cache, PipelineConfig{
+	pipeline := newDaemonPipeline(q, bridge, cache, PipelineConfig{
 		IdleThresholdSec:     cfg.IdleThresholdSec,
 		CPUDeltaThresh:       cfg.AgentCPUThresh,
 		CPUDeltaThreshIdle:   cfg.AgentCPUThreshIdle,

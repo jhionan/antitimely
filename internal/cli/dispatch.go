@@ -36,6 +36,8 @@ func Dispatch(args []string) int {
 		return cmdReview(args[1:])
 	case "rules":
 		return cmdRules(args[1:])
+	case "spaces":
+		return cmdSpaces()
 	case "report":
 		return cmdReport(args[1:])
 	case "summary":
@@ -80,7 +82,8 @@ Usage:
   antitimely end-day                  shortcut for 'project pause-all' (use to stop all tracking at end of day)
   antitimely start-day                shortcut for 'project resume-all' (use to resume tracking at start of day)
   antitimely review
-  antitimely rules    list  |  delete <id>
+  antitimely rules    list  |  add --project=<name> [--priority=N] [--bundle=..] [--title=..] [--binary=..] [--cwd=..] [--space=..]  |  delete <id>
+  antitimely spaces                       list herdr spaces and their ids
   antitimely report   [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]
   antitimely summary  [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--project=<name>] [--company=<name>] [--all-authors] [--md|--txt]
   antitimely reset    all  |  ticks   [--yes]

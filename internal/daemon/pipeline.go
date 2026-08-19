@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"log"
-	"strings"
 
 	"github.com/rian/antitimely/internal/domain"
+	"github.com/rian/antitimely/internal/herdr"
 	"github.com/rian/antitimely/internal/macos"
 	"github.com/rian/antitimely/internal/store"
 )
@@ -51,7 +51,17 @@ type PipelineConfig struct {
 type procClass struct {
 	name  string // binary name captured at classification; mismatch ⇒ PID reuse
 	cwd   string // looked up via lsof; reused on subsequent emits
-	track bool   // false ⇒ skip this PID for the rest of its life
+	track bool   // false ⇒ skip this PID (until trackFinal, see below)
+	// trackFinal reports whether track was decided from complete inputs. It
+	// is false only when the herdr space could not be determined on the
+	// classifying tick AND the space is the one thing that could still flip
+	// track to true (i.e. neither the binary allowlist nor a cwd pattern
+	// matched). track is then recomputed on later ticks until the space
+	// resolves — the expensive part, the lsof cwd lookup, stays cached.
+	// Without this, one transient `ps -Eww` failure permanently untracked a
+	// process whose only route to a project is its space binding, losing
+	// every subsequent tick rather than merely its space.
+	trackFinal bool
 }
 
 // activityState is the per-PID hysteresis state for the busy classifier. A
@@ -89,8 +99,30 @@ type Pipeline struct {
 	// cleared on a cache-snapshot swap: busy/idle is a function of observed CPU,
 	// independent of rule changes, so hysteresis state should survive a reload.
 	procActivity map[int]activityState
-	lastSnap     *CacheSnapshot
-	perm      *PermissionTracker
+	// herdr resolves a HERDR_PANE_ID / Claude session uuid to its herdr
+	// workspace ("space"). NewPipeline defaults this to a Resolver with an
+	// empty path, which resolves nothing but is safe to call — so tests that
+	// never touch herdr don't need to wire one up. daemon.go overwrites this
+	// with a resolver pointed at the real session.json.
+	herdr *herdr.Resolver
+	// procPane caches pid -> HERDR_PANE_ID (the value of the env var, "" for
+	// a process not running under herdr). A process's environment is
+	// immutable after exec, so one `ps -Eww` probe per pid suffices. The
+	// pane -> space mapping is deliberately NOT cached here: it is read from
+	// herdr's session.json, which fails closed while that file is missing,
+	// mid-write, or not yet flushed for a freshly created space, so caching
+	// a failed resolution would pin a long-lived agent to "no space" for its
+	// entire life. Resolving the pane per tick keeps attribution
+	// self-healing at the cost of one map lookup.
+	// Entries are swept by the same livePIDs pass that clears prevCPU and
+	// procClass, and are also deleted alongside procClass/procActivity on
+	// PID-reuse detection (binary-name change or CPU-counter regression) — a
+	// recycled pid never leaves livePIDs, so the sweep alone can't catch a
+	// stale binding there; without this a recycled pid would keep billing
+	// the old process's space.
+	procPane map[int]string
+	lastSnap *CacheSnapshot
+	perm     *PermissionTracker
 	// armedAgentStreak counts ticks of matching agent activity (user present)
 	// accumulated by an armed project toward the AutoDisarmAgentTicks
 	// threshold. Reset to zero whenever the project disarms.
@@ -136,6 +168,8 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 		prevCPU:          map[int]uint64{},
 		procClass:        map[int]procClass{},
 		procActivity:     map[int]activityState{},
+		herdr:            herdr.NewResolver(""),
+		procPane:         map[int]string{},
 		armedAgentStreak: map[int64]int{},
 		transcriptState:  map[string]transcriptSession{},
 	}
@@ -212,6 +246,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			WindowTitle: sig.WindowTitle,
 			BinaryName:  sig.BinaryName,
 			Cwd:         sig.Cwd,
+			SpaceID:     sig.SpaceID,
 			FirstSeen:   now,
 		})
 		if err != nil {
@@ -447,6 +482,11 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				delete(p.procActivity, pid)
 			}
 		}
+		for pid := range p.procPane {
+			if !livePIDs[pid] {
+				delete(p.procPane, pid)
+			}
+		}
 	}()
 
 	procs, err := p.bridge.ListProcesses(ctx)
@@ -479,6 +519,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		if cached, ok := p.procClass[proc.PID]; ok && cached.name != proc.Name {
 			delete(p.procClass, proc.PID)
 			delete(p.procActivity, proc.PID)
+			delete(p.procPane, proc.PID)
 		}
 
 		// CPU counters are monotonic within a process; a regression means
@@ -487,6 +528,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		if proc.CPUTicks < prev {
 			delete(p.procClass, proc.PID)
 			delete(p.procActivity, proc.PID)
+			delete(p.procPane, proc.PID)
 			continue
 		}
 
@@ -512,6 +554,48 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 			continue
 		}
 
+		// Resolve the herdr space ahead of the track decision below: a
+		// process in a rule-bound space must be tracked even when its cwd
+		// matches no pattern, so track can't be computed without it.
+		//
+		// Two lookups, cached differently on purpose. The pane id comes from
+		// the process environment, which is immutable after exec, so one
+		// probe per pid is both correct and enough. The pane -> space
+		// mapping comes from herdr's session.json, which fails closed while
+		// that file is missing, mid-write, or not yet flushed for a
+		// just-created space; it is therefore re-resolved every tick, so a
+		// process that started before herdr persisted its space picks that
+		// space up as soon as the file lands instead of carrying "no space"
+		// (and billing whatever its cwd rule says) for its whole life.
+		paneID, paneKnown := p.procPane[proc.PID]
+		if !paneKnown {
+			v, err := p.bridge.ProcessEnvVar(ctx, proc.PID, "HERDR_PANE_ID")
+			if err != nil {
+				// A failed probe must not drop the signal, and must not be
+				// cached either — caching would wrongly pin this pid to
+				// cwd-only matching for its entire life over one transient
+				// failure. Log and retry the probe next tick, mirroring the
+				// "don't cache an empty cwd" precedent just below.
+				log.Printf("env pid=%d: %v", proc.PID, err)
+			} else {
+				// A successful probe finding no variable is a real answer
+				// (the process is not under herdr) and is cached, so
+				// non-herdr processes aren't re-probed every tick.
+				paneID, paneKnown = v, true
+				p.procPane[proc.PID] = v
+			}
+		}
+		// spaceKnown distinguishes "this process has no space" (a fact) from
+		// "the space could not be determined right now" (a transient), which
+		// is what the classification below must not cache.
+		spaceID := ""
+		spaceKnown := paneKnown && paneID == ""
+		if paneID != "" {
+			if s, resolved := p.herdr.SpaceForPane(paneID); resolved {
+				spaceID, spaceKnown = s.ID, true
+			}
+		}
+
 		cached, ok := p.procClass[proc.PID]
 		if !ok {
 			cwd, err := p.bridge.ProcessCWD(ctx, proc.PID)
@@ -523,11 +607,15 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				// Sandboxed or transient — retry rather than cache an empty cwd.
 				continue
 			}
-			cached = procClass{
-				name:  proc.Name,
-				cwd:   cwd,
-				track: snap.AllowedBinaries[proc.Name] || cwdUnderAnyPrefix(cwd, snap.CwdPrefixes),
-			}
+			cached = procClass{name: proc.Name, cwd: cwd}
+		}
+		if !cached.trackFinal {
+			// Everything except the space binding; if any of it matches, the
+			// space cannot change the answer and the verdict is final.
+			trackWithoutSpace := snap.AllowedBinaries[proc.Name] ||
+				cwdMatchesAnyPattern(cached.cwd, snap.CwdPatterns)
+			cached.track = trackWithoutSpace || (spaceID != "" && snap.BoundSpaceIDs[spaceID])
+			cached.trackFinal = trackWithoutSpace || spaceKnown
 			p.procClass[proc.PID] = cached
 		}
 
@@ -539,20 +627,19 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 			Source:     domain.SourceAgent,
 			BinaryName: proc.Name,
 			Cwd:        cached.cwd,
+			SpaceID:    spaceID,
 		})
 	}
 
 	return out
 }
 
-// cwdUnderAnyPrefix returns true when cwd equals or is a true subdirectory of
-// any entry in prefixes (which must already be trailing-slash-stripped). Same
-// semantics as the rule matcher's cwd check, kept consistent so the upstream
-// "is this dir tracked?" decision and the downstream "does rule X apply?"
-// decision can never disagree.
-func cwdUnderAnyPrefix(cwd string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if cwd == p || strings.HasPrefix(cwd, p+"/") {
+// cwdMatchesAnyPattern reports whether cwd is covered by any rule cwd pattern.
+// It delegates to domain.MatchesCwd so the upstream "is this dir tracked?"
+// decision and the downstream "does rule X apply?" decision can never disagree.
+func cwdMatchesAnyPattern(cwd string, patterns []string) bool {
+	for _, p := range patterns {
+		if domain.MatchesCwd(p, cwd) {
 			return true
 		}
 	}
