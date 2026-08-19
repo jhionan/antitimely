@@ -9,6 +9,8 @@ package herdr
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +57,7 @@ type Resolver struct {
 	modTime  time.Time
 	size     int64
 	loaded   bool
+	warned   bool              // true once a failure has been logged, until the next successful parse
 	spaces   map[string]Space  // workspace id -> Space
 	sessions map[string]string // claude session uuid -> workspace id
 }
@@ -96,29 +99,34 @@ func (r *Resolver) SpaceForSession(uuid string) (Space, bool) {
 	return s, ok
 }
 
-// reloadLocked re-parses the file when it has changed. Any failure leaves the
-// previous (possibly empty) maps in place; callers then simply resolve nothing.
+// reloadLocked re-parses the file when it has changed. If session.json is
+// missing, unreadable, or fails to parse, the resolver fails closed: it
+// discards any previously loaded spaces/sessions (so a stale mapping is never
+// served after herdr exits or the file is briefly truncated/corrupt) and
+// resets modTime/size to their zero values so a later, valid reappearance of
+// the file is detected and reloaded on the next call. The failure is logged
+// at most once per transition into the failed state (via r.warned), not on
+// every call, since callers poll this every few seconds.
 func (r *Resolver) reloadLocked() {
 	if r.path == "" {
 		return
 	}
 	fi, err := os.Stat(r.path)
 	if err != nil {
-		if !r.loaded {
-			r.spaces, r.sessions = map[string]Space{}, map[string]string{}
-			r.loaded = true
-		}
+		r.failClosedLocked(fmt.Sprintf("stat %s: %v", r.path, err))
 		return
 	}
-	if r.loaded && fi.ModTime().Equal(r.modTime) && fi.Size() == r.size {
+	if r.loaded && !r.warned && fi.ModTime().Equal(r.modTime) && fi.Size() == r.size {
 		return
 	}
 	raw, err := os.ReadFile(r.path)
 	if err != nil {
+		r.failClosedLocked(fmt.Sprintf("read %s: %v", r.path, err))
 		return
 	}
 	var f sessionFile
 	if err := json.Unmarshal(raw, &f); err != nil {
+		r.failClosedLocked(fmt.Sprintf("parse %s: %v", r.path, err))
 		return
 	}
 	spaces := make(map[string]Space, len(f.Workspaces))
@@ -142,4 +150,18 @@ func (r *Resolver) reloadLocked() {
 	}
 	r.spaces, r.sessions = spaces, sessions
 	r.modTime, r.size, r.loaded = fi.ModTime(), fi.Size(), true
+	r.warned = false
+}
+
+// failClosedLocked clears any previously loaded mapping so lookups resolve
+// nothing, and logs reason at most once per transition into the failed
+// state. Callers must hold r.mu.
+func (r *Resolver) failClosedLocked(reason string) {
+	r.spaces, r.sessions = map[string]Space{}, map[string]string{}
+	r.loaded = true
+	r.modTime, r.size = time.Time{}, 0
+	if !r.warned {
+		log.Printf("herdr: %s; spaces unresolved until session.json is valid again", reason)
+		r.warned = true
+	}
 }
