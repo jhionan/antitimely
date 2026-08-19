@@ -118,16 +118,21 @@ func (p *Pipeline) collectTranscriptSignals(snap *CacheSnapshot, now int64) []do
 			if cwd == "" {
 				cwd = decodeProjectDir(pd.Name())
 			}
-			if !cwdMatchesAnyPattern(cwd, snap.CwdPatterns) {
-				continue
-			}
-			if now-st.lastActivity >= grace {
-				continue
-			}
+			// Resolve the session's space before the track gate: a
+			// space-bound project must admit this signal even when the cwd
+			// matches no pattern, mirroring collectAgentSignals' track logic.
+			// Without this, a space-only-bound project would silently lose
+			// every transcript signal — no log line, just missing time.
 			sessionID := e.Name()[:len(e.Name())-len(".jsonl")]
 			spaceID := ""
 			if s, ok := p.herdr.SpaceForSession(sessionID); ok {
 				spaceID = s.ID
+			}
+			if !cwdMatchesAnyPattern(cwd, snap.CwdPatterns) && !(spaceID != "" && snap.BoundSpaceIDs[spaceID]) {
+				continue
+			}
+			if now-st.lastActivity >= grace {
+				continue
 			}
 			out = append(out, domain.Signal{
 				Source:      domain.SourceTranscript,

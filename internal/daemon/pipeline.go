@@ -96,8 +96,12 @@ type Pipeline struct {
 	// with a resolver pointed at the real session.json.
 	herdr *herdr.Resolver
 	// procSpace caches pid -> herdr workspace id. A process's environment is
-	// immutable after exec, so one lookup per pid suffices; entries are swept
-	// by the same livePIDs pass that clears prevCPU and procClass.
+	// immutable after exec, so one lookup per pid suffices. Entries are swept
+	// by the same livePIDs pass that clears prevCPU and procClass, and are
+	// also deleted alongside procClass/procActivity on PID-reuse detection
+	// (binary-name change or CPU-counter regression) — a recycled pid never
+	// leaves livePIDs, so the sweep alone can't catch a stale binding there;
+	// without this a recycled pid would keep billing the old process's space.
 	procSpace map[int]string
 	lastSnap  *CacheSnapshot
 	perm      *PermissionTracker
@@ -497,6 +501,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		if cached, ok := p.procClass[proc.PID]; ok && cached.name != proc.Name {
 			delete(p.procClass, proc.PID)
 			delete(p.procActivity, proc.PID)
+			delete(p.procSpace, proc.PID)
 		}
 
 		// CPU counters are monotonic within a process; a regression means
@@ -505,6 +510,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		if proc.CPUTicks < prev {
 			delete(p.procClass, proc.PID)
 			delete(p.procActivity, proc.PID)
+			delete(p.procSpace, proc.PID)
 			continue
 		}
 
@@ -539,14 +545,18 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		if !ok {
 			paneID, err := p.bridge.ProcessEnvVar(ctx, proc.PID, "HERDR_PANE_ID")
 			if err != nil {
-				// A failed probe must not drop the signal — it just degrades
-				// this pid to cwd-only matching for its lifetime.
+				// A failed probe must not drop the signal, and must not be
+				// cached either — caching would wrongly pin this pid to
+				// cwd-only matching for its entire life over one transient
+				// failure. Log and retry the probe next tick, mirroring the
+				// "don't cache an empty cwd" precedent just below.
 				log.Printf("env pid=%d: %v", proc.PID, err)
+			} else {
+				if s, resolved := p.herdr.SpaceForPane(paneID); resolved {
+					spaceID = s.ID
+				}
+				p.procSpace[proc.PID] = spaceID
 			}
-			if s, resolved := p.herdr.SpaceForPane(paneID); resolved {
-				spaceID = s.ID
-			}
-			p.procSpace[proc.PID] = spaceID
 		}
 
 		cached, ok := p.procClass[proc.PID]

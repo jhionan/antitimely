@@ -806,6 +806,62 @@ func TestRPC_ReloadCache_PreservesArmedProjects(t *testing.T) {
 	}
 }
 
+// TestRPC_ReloadCache_PopulatesSpaceID guards the wiring in ReloadCache that
+// turns a rule's stored match_space_id column into both
+// domain.RuleSpec.MatchSpaceID (so MatchRules can evaluate the clause) and
+// CacheSnapshot.BoundSpaceIDs (so the agent/transcript pipelines can track a
+// process in a bound space even without a cwd match). Deleting either half of
+// that wiring leaves the rest of the suite green while the whole space
+// attribution feature goes silently inert — this is the regression test for
+// exactly that failure mode.
+func TestRPC_ReloadCache_PopulatesSpaceID(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	projID, err := q.AddProject(ctx, store.AddProjectParams{Name: "space-bound", CreatedAt: 1000})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	const wantSpace = "wN"
+	if _, err := q.AddRule(ctx, store.AddRuleParams{
+		ProjectID:    projID,
+		Priority:     50,
+		MatchSpaceID: sql.NullString{String: wantSpace, Valid: true},
+		CreatedAt:    1000,
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	// Trigger a cache reload (WatchAdd calls ReloadCache as a side effect;
+	// same pattern as TestRPC_ReloadCache_PreservesArmedProjects above).
+	if err := client.Call(rpcapi.ServiceName+".WatchAdd",
+		rpcapi.WatchAddArgs{Kind: "bundle", Identifier: "com.space.test"},
+		&rpcapi.WatchAddReply{}); err != nil {
+		t.Fatalf("WatchAdd: %v", err)
+	}
+
+	snap := cache.Snapshot()
+
+	var found bool
+	for _, r := range snap.Rules {
+		if r.ProjectID != projID {
+			continue
+		}
+		found = true
+		if r.MatchSpaceID == nil || *r.MatchSpaceID != wantSpace {
+			t.Errorf("rule.MatchSpaceID = %v, want %q", r.MatchSpaceID, wantSpace)
+		}
+	}
+	if !found {
+		t.Fatalf("rule for project %d not found in snapshot.Rules: %+v", projID, snap.Rules)
+	}
+
+	if !snap.BoundSpaceIDs[wantSpace] {
+		t.Errorf("BoundSpaceIDs = %v, want it to contain %q", snap.BoundSpaceIDs, wantSpace)
+	}
+}
+
 func TestRPC_ProjectAdd_ArmsNewProject(t *testing.T) {
 	client, _, cache := setupRPCServer(t)
 
