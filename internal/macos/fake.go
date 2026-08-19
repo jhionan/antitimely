@@ -43,6 +43,10 @@ type FakeBridge struct {
 
 	// EnvErr applies to every pid when set.
 	EnvErr error
+
+	// EnvCalls counts ProcessEnvVar invocations so tests can assert the
+	// daemon probes a pid's environment once rather than every tick.
+	EnvCalls int
 }
 
 func (f *FakeBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
@@ -69,6 +73,7 @@ func (f *FakeBridge) ProcessCWD(ctx context.Context, pid int) (string, error) {
 	return f.CWDByPID[pid], nil
 }
 func (f *FakeBridge) ProcessEnvVar(ctx context.Context, pid int, key string) (string, error) {
+	f.EnvCalls++
 	if f.EnvErr != nil {
 		return "", f.EnvErr
 	}
