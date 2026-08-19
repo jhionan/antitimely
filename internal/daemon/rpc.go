@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/rian/antitimely/internal/domain"
@@ -321,6 +320,7 @@ func (s *AntitimelyService) ReloadCache() error {
 	snap := &CacheSnapshot{
 		AllowedBundles:  map[string]bool{},
 		AllowedBinaries: map[string]bool{},
+		BoundSpaceIDs:   map[string]bool{},
 	}
 	for _, w := range watched {
 		switch w.Kind {
@@ -366,22 +366,23 @@ func (s *AntitimelyService) ReloadCache() error {
 	for _, id := range pausedIDs {
 		snap.PausedProjectIDs[id] = true
 	}
-	// Distinct, trailing-slash-normalized cwd prefixes for the agent pipeline's
-	// directory-widening fast check.
-	seenPrefix := map[string]struct{}{}
+	// Distinct cwd match values (literal prefixes and globs alike, stored
+	// verbatim — domain.MatchesCwd handles trailing slashes) for the agent
+	// pipeline's directory-widening fast check.
+	seenPattern := map[string]struct{}{}
 	for _, r := range snap.Rules {
 		if r.MatchCwdPrefix == nil {
 			continue
 		}
-		p := strings.TrimRight(*r.MatchCwdPrefix, "/")
+		p := *r.MatchCwdPrefix
 		if p == "" {
 			continue
 		}
-		if _, ok := seenPrefix[p]; ok {
+		if _, ok := seenPattern[p]; ok {
 			continue
 		}
-		seenPrefix[p] = struct{}{}
-		snap.CwdPrefixes = append(snap.CwdPrefixes, p)
+		seenPattern[p] = struct{}{}
+		snap.CwdPatterns = append(snap.CwdPatterns, p)
 	}
 	s.Cache.StorePreservingRuntime(snap)
 	return nil

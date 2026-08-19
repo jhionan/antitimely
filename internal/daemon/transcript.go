@@ -118,7 +118,7 @@ func (p *Pipeline) collectTranscriptSignals(snap *CacheSnapshot, now int64) []do
 			if cwd == "" {
 				cwd = decodeProjectDir(pd.Name())
 			}
-			if !cwdUnderAnyPrefix(cwd, snap.CwdPrefixes) {
+			if !cwdMatchesAnyPattern(cwd, snap.CwdPatterns) {
 				continue
 			}
 			if now-st.lastActivity >= grace {

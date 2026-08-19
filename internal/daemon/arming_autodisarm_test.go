@@ -53,7 +53,7 @@ func TestPipeline_ArmedProject_AutoDisarmsAfterSustainedAgentActivity(t *testing
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{bin: true},
 		Rules:           []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwd}},
-		CwdPrefixes:     []string{cwd},
+		CwdPatterns:     []string{cwd},
 		ArmedProjects:   map[int64]bool{projID: true},
 	})
 	br.IdleSecondsVal = 5 // user present
@@ -105,7 +105,7 @@ func TestPipeline_ArmedProject_NoAutoDisarmWhenIdle_ButTracksSuppressed(t *testi
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{bin: true},
 		Rules:           []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwd}},
-		CwdPrefixes:     []string{cwd},
+		CwdPatterns:     []string{cwd},
 		ArmedProjects:   map[int64]bool{projID: true},
 	})
 	br.IdleSecondsVal = 200 // user idle

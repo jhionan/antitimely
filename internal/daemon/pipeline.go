@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"log"
-	"strings"
 
 	"github.com/rian/antitimely/internal/domain"
 	"github.com/rian/antitimely/internal/macos"
@@ -526,7 +525,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 			cached = procClass{
 				name:  proc.Name,
 				cwd:   cwd,
-				track: snap.AllowedBinaries[proc.Name] || cwdUnderAnyPrefix(cwd, snap.CwdPrefixes),
+				track: snap.AllowedBinaries[proc.Name] || cwdMatchesAnyPattern(cwd, snap.CwdPatterns),
 			}
 			p.procClass[proc.PID] = cached
 		}
@@ -545,14 +544,12 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 	return out
 }
 
-// cwdUnderAnyPrefix returns true when cwd equals or is a true subdirectory of
-// any entry in prefixes (which must already be trailing-slash-stripped). Same
-// semantics as the rule matcher's cwd check, kept consistent so the upstream
-// "is this dir tracked?" decision and the downstream "does rule X apply?"
-// decision can never disagree.
-func cwdUnderAnyPrefix(cwd string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if cwd == p || strings.HasPrefix(cwd, p+"/") {
+// cwdMatchesAnyPattern reports whether cwd is covered by any rule cwd pattern.
+// It delegates to domain.MatchesCwd so the upstream "is this dir tracked?"
+// decision and the downstream "does rule X apply?" decision can never disagree.
+func cwdMatchesAnyPattern(cwd string, patterns []string) bool {
+	for _, p := range patterns {
+		if domain.MatchesCwd(p, cwd) {
 			return true
 		}
 	}

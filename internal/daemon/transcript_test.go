@@ -60,8 +60,8 @@ func newTranscriptPipeline(t *testing.T, root string, graceSec int, prefixes []s
 	t.Helper()
 	cache := NewCache()
 	// Install a snapshot carrying the cwd prefixes (no rules needed; the
-	// collector only consults CwdPrefixes).
-	cache.Store(&CacheSnapshot{CwdPrefixes: prefixes})
+	// collector only consults CwdPatterns).
+	cache.Store(&CacheSnapshot{CwdPatterns: prefixes})
 	p := NewPipeline(nil, nil, cache, PipelineConfig{
 		TranscriptTracking: true,
 		TranscriptRoot:     root,

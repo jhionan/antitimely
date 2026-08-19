@@ -337,7 +337,7 @@ func TestPipeline_AgentSignal_CwdRuleWidensBinaryAllowlist(t *testing.T) {
 		Rules: []domain.RuleSpec{
 			{ID: 1, ProjectID: projID, Priority: 100, MatchCwdPrefix: &cwdPrefix},
 		},
-		CwdPrefixes: []string{"/Users/rian/focaApp/dentix"},
+		CwdPatterns: []string{"/Users/rian/focaApp/dentix"},
 	})
 	br.IdleSecondsVal = 5
 	br.Processes = []macos.ProcessSample{{PID: 999, Name: "go", CPUTicks: 100}}
@@ -365,7 +365,7 @@ func TestPipeline_AgentSignal_NonAllowlistedOutsideTrackedDir_Skipped(t *testing
 
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{},
-		CwdPrefixes:     []string{"/Users/rian/work"},
+		CwdPatterns:     []string{"/Users/rian/work"},
 	})
 	br.IdleSecondsVal = 5
 	br.Processes = []macos.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 100}}
@@ -392,7 +392,7 @@ func TestPipeline_AgentSignal_IgnoredPID_DoesNotRelsof(t *testing.T) {
 
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{},
-		CwdPrefixes:     []string{"/work/tracked"},
+		CwdPatterns:     []string{"/work/tracked"},
 	})
 	br.IdleSecondsVal = 5
 	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 100}}
@@ -443,7 +443,7 @@ func TestPipeline_AgentSignal_PIDReuse_BinaryNameChange_Reclassifies(t *testing.
 		Rules: []domain.RuleSpec{
 			{ID: 1, ProjectID: projID, Priority: 100, MatchCwdPrefix: &cwd},
 		},
-		CwdPrefixes: []string{"/work/dentix"},
+		CwdPatterns: []string{"/work/dentix"},
 	})
 	br.IdleSecondsVal = 5
 
@@ -492,7 +492,7 @@ func TestPipeline_AgentSignal_PIDReuse_CPURegression_Reclassifies(t *testing.T) 
 
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{},
-		CwdPrefixes:     []string{"/work/tracked"},
+		CwdPatterns:     []string{"/work/tracked"},
 	})
 	br.IdleSecondsVal = 5
 
@@ -539,7 +539,7 @@ func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
 	// Initial cache: no rules; ffmpeg in /work/dentix is ignored.
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{},
-		CwdPrefixes:     nil,
+		CwdPatterns:     nil,
 	})
 	br.IdleSecondsVal = 5
 	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 100}}
@@ -555,7 +555,7 @@ func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
 	// notice the pointer change and clear procClass.
 	cache.Store(&CacheSnapshot{
 		AllowedBinaries: map[string]bool{},
-		CwdPrefixes:     []string{"/work/dentix"},
+		CwdPatterns:     []string{"/work/dentix"},
 	})
 	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 300}}
 	_ = p.RunTick(ctx, 1010)
@@ -828,7 +828,7 @@ func TestPipeline_AgentSignal_Armed_DropsTick(t *testing.T) {
 		AllowedBundles:   map[string]bool{},
 		AllowedBinaries:  map[string]bool{bin: true},
 		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix}},
-		CwdPrefixes:      []string{cwdPrefix},
+		CwdPatterns:      []string{cwdPrefix},
 		PausedProjectIDs: map[int64]bool{},
 		ArmedProjects:    map[int64]bool{projID: true},
 	})
@@ -876,7 +876,7 @@ func TestPipeline_AgentSignal_Unarmed_CountsNormally(t *testing.T) {
 		AllowedBundles:   map[string]bool{},
 		AllowedBinaries:  map[string]bool{bin: true},
 		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix}},
-		CwdPrefixes:      []string{cwdPrefix},
+		CwdPatterns:      []string{cwdPrefix},
 		PausedProjectIDs: map[int64]bool{},
 		ArmedProjects:    map[int64]bool{}, // NOT armed
 	})
@@ -919,7 +919,7 @@ func TestPipeline_AutoResume_ArmsAndDropsCurrentTick(t *testing.T) {
 		AllowedBundles:   map[string]bool{},
 		AllowedBinaries:  map[string]bool{bin: true},
 		Rules:            []domain.RuleSpec{{ID: 1, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix}},
-		CwdPrefixes:      []string{cwdPrefix},
+		CwdPatterns:      []string{cwdPrefix},
 		PausedProjectIDs: map[int64]bool{projID: true},
 		ArmedProjects:    map[int64]bool{},
 	})
@@ -1222,7 +1222,7 @@ func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
 			{ID: 1, ProjectID: projID, Priority: 100, MatchBundleID: &bundle, MatchTitleSubstr: &title},
 			{ID: 2, ProjectID: projID, Priority: 100, MatchBinaryName: &bin, MatchCwdPrefix: &cwdPrefix},
 		},
-		CwdPrefixes:      []string{cwdPrefix},
+		CwdPatterns:      []string{cwdPrefix},
 		PausedProjectIDs: map[int64]bool{},
 		ArmedProjects:    map[int64]bool{projID: true},
 	})
@@ -1300,5 +1300,18 @@ func TestPipeline_Busy_PIDReuseResetsWorkingState(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterReuse2)
 	if afterReuse2 != 2 {
 		t.Errorf("reused PID should emit after re-accumulating rise ticks; got %d, want 2", afterReuse2)
+	}
+}
+
+func TestCwdMatchesAnyPatternGlob(t *testing.T) {
+	pats := []string{"/repo/.claude/worktrees/md-*"}
+	if !cwdMatchesAnyPattern("/repo/.claude/worktrees/md-engine", pats) {
+		t.Fatal("glob pattern must track the worktree itself")
+	}
+	if !cwdMatchesAnyPattern("/repo/.claude/worktrees/md-engine/DAAS.API", pats) {
+		t.Fatal("glob pattern must track directories nested in the worktree")
+	}
+	if cwdMatchesAnyPattern("/repo/.claude/worktrees/packing-slip", pats) {
+		t.Fatal("glob pattern must not track a non-matching sibling")
 	}
 }

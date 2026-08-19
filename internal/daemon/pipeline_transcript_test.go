@@ -19,7 +19,7 @@ func reloadCacheForTest(t *testing.T, db *sql.DB, cache *Cache) {
 }
 
 // seedProjectWithCwdRule inserts a project + a cwd-prefix rule and reloads the
-// cache so MatchRules and CwdPrefixes both cover prefix.
+// cache so MatchRules and CwdPatterns both cover prefix.
 func seedProjectWithCwdRule(t *testing.T, db *sql.DB, cache *Cache, name, prefix string) int64 {
 	t.Helper()
 	res, err := db.Exec(`INSERT INTO projects (name, created_at) VALUES (?, 0)`, name)
