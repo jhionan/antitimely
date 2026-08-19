@@ -67,8 +67,8 @@ func TestRulesAddRejectsStarBeforeLastSlash(t *testing.T) {
 	if code != 64 {
 		t.Fatalf("star before the last / must exit 64, got %d (output: %q)", code, out)
 	}
-	if !strings.Contains(out, "final path segment") {
-		t.Fatalf("expected the ValidateCwdPattern error naming the final path segment, got %q", out)
+	if !strings.Contains(out, "final character") {
+		t.Fatalf("expected the ValidateCwdPattern error naming the final character, got %q", out)
 	}
 	if strings.Contains(out, "unknown subcommand") {
 		t.Fatalf("rules add must be wired up in cmdRules's switch, not falling through to the unknown-subcommand branch: %q", out)

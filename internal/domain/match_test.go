@@ -144,15 +144,70 @@ func TestMatchesCwd(t *testing.T) {
 	}
 }
 
+// TestValidateCwdPattern pins the accepted shapes. Parity between MatchesCwd
+// (path.Match + ancestor walk) and the retroactive SQL (SQLite GLOB) holds
+// only when '*' is the FINAL CHARACTER - not merely somewhere in the last
+// segment, which is what this used to allow. Verified against both engines:
+// "/wt/*-md" vs "/wt/a/b-md" and "/wt/md-*x" vs "/wt/md-a/b/cx" both GLOB-match
+// and both fail path.Match, and a bare "*" matches everything in SQL and
+// nothing in Go.
 func TestValidateCwdPattern(t *testing.T) {
-	if err := ValidateCwdPattern("/a/b/md-*"); err != nil {
-		t.Fatalf("star in final segment must be allowed: %v", err)
+	valid := []string{
+		"/a/b/md-*",  // star final
+		"/a/b/md-*/", // trailing slash is trimmed first
+		"/a/b/c",     // plain literal prefix
+		"/a/b/c/",
+		"/*", // degenerate but consistent: star final, has a '/'
 	}
-	if err := ValidateCwdPattern("/a/b/c"); err != nil {
-		t.Fatalf("literal must be allowed: %v", err)
+	for _, p := range valid {
+		if err := ValidateCwdPattern(p); err != nil {
+			t.Errorf("ValidateCwdPattern(%q) = %v, want nil", p, err)
+		}
 	}
-	if err := ValidateCwdPattern("/a/*/md-x"); err == nil {
-		t.Fatal("star before the last / must be rejected")
+
+	invalid := []string{
+		"/a/*/md-x", // star before the last '/'
+		"/wt/*-md",  // star in the last segment but not final
+		"/wt/md-*x", // ditto, one character short of final
+		"/wt/*/*",   // more than one star
+		"*",         // no '/': matches everything in GLOB, nothing in Go
+		"md-*",      // no '/'
+		"",          // empty
+		"/",         // empty after trimming
+	}
+	for _, p := range invalid {
+		if err := ValidateCwdPattern(p); err == nil {
+			t.Errorf("ValidateCwdPattern(%q) = nil, want an error", p)
+		}
+	}
+}
+
+// TestValidateCwdPatternMatchesRealDivergence is the empirical half: every
+// pattern ValidateCwdPattern rejects for parity reasons must actually diverge
+// between MatchesCwd and GLOB semantics, and the accepted shape must not.
+// (GLOB's answers below are the measured ones - SQLite matches all four.)
+func TestValidateCwdPatternMatchesRealDivergence(t *testing.T) {
+	cases := []struct {
+		pattern, cwd string
+		matchesCwd   bool // what the live matcher says; GLOB says true for all
+	}{
+		{"/wt/*-md", "/wt/a/b-md", false},        // rejected: diverges
+		{"/wt/md-*x", "/wt/md-a/b/cx", false},    // rejected: diverges
+		{"*", "/a/b", false},                     // rejected: diverges
+		{"/wt/md-*", "/wt/md-tracker/sub", true}, // accepted: agrees
+	}
+	for _, c := range cases {
+		if got := MatchesCwd(c.pattern, c.cwd); got != c.matchesCwd {
+			t.Errorf("MatchesCwd(%q, %q) = %v, want %v", c.pattern, c.cwd, got, c.matchesCwd)
+		}
+		err := ValidateCwdPattern(c.pattern)
+		if c.matchesCwd && err != nil {
+			t.Errorf("ValidateCwdPattern(%q) rejected a pattern that agrees with GLOB: %v", c.pattern, err)
+		}
+		if !c.matchesCwd && err == nil {
+			t.Errorf("ValidateCwdPattern(%q) accepted a pattern whose live and retroactive "+
+				"matching disagree", c.pattern)
+		}
 	}
 }
 

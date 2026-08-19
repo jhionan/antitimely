@@ -806,6 +806,15 @@ func (s *AntitimelyService) RuleDelete(args rpcapi.RuleDeleteArgs, reply *rpcapi
 func (s *AntitimelyService) RuleAdd(args rpcapi.RuleAddArgs, reply *rpcapi.RuleAddReply) error {
 	ctx, cancel := handlerCtx()
 	defer cancel()
+	// Validate here, not only in the CLI: this handler is the RPC boundary,
+	// so any other caller (a script, a future menu path, a retry of an old
+	// client) would otherwise be able to store a pattern whose live matcher
+	// (path.Match) and retroactive SQL (SQLite GLOB) disagree.
+	if args.MatchCWDPrefix != "" {
+		if err := domain.ValidateCwdPattern(args.MatchCWDPrefix); err != nil {
+			return err
+		}
+	}
 	proj, err := s.Q.GetProjectByName(ctx, args.ProjectName)
 	if err != nil {
 		return fmt.Errorf("project %q: %w", args.ProjectName, err)

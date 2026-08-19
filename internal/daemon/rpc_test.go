@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -1171,5 +1172,38 @@ func TestRPC_PendingReview_CarriesSpaceID(t *testing.T) {
 	}
 	if reply.Signatures[0].SpaceID != "wN" {
 		t.Fatalf("SpaceID = %q, want %q", reply.Signatures[0].SpaceID, "wN")
+	}
+}
+
+// TestRPC_RuleAdd_RejectsInvalidCwdPattern pins that cwd-pattern validation
+// lives at the RPC boundary, not only in the CLI: any other caller could
+// otherwise store a pattern whose live matcher and retroactive SQL disagree.
+func TestRPC_RuleAdd_RejectsInvalidCwdPattern(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "MD-Tracker", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.RuleAddReply
+	err := client.Call(rpcapi.ServiceName+".RuleAdd", rpcapi.RuleAddArgs{
+		ProjectName:    "MD-Tracker",
+		Priority:       100,
+		MatchCWDPrefix: "/a/*/md-x",
+	}, &reply)
+	if err == nil {
+		t.Fatal("RuleAdd must reject a '*' that is not the final character of the pattern")
+	}
+	if !strings.Contains(err.Error(), "final character") {
+		t.Fatalf("expected the ValidateCwdPattern error, got %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rules`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("a rejected rule must not be stored, found %d rules", n)
 	}
 }

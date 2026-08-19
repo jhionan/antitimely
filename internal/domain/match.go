@@ -80,14 +80,36 @@ func MatchesCwd(pattern, cwd string) bool {
 	}
 }
 
-// ValidateCwdPattern rejects patterns whose '*' is not confined to the final
-// path segment. SQLite's GLOB lets '*' cross '/' while path.Match does not, so
-// a star earlier in the path would make the live matcher and the retroactive
-// SQL disagree.
+// ValidateCwdPattern accepts a literal path prefix, or a glob whose '*' is the
+// FINAL CHARACTER of the pattern (trailing '/' ignored) - e.g.
+// "/repo/wt/md-*". Everything else is rejected, and a pattern with no '/' at
+// all is rejected outright.
+//
+// The bar is parity between the two matchers that must agree on every rule:
+// MatchesCwd (path.Match, whose '*' never crosses '/', plus an ancestor walk)
+// and the retroactive SQL (SQLite GLOB, whose '*' does cross '/'). "Star
+// somewhere in the last segment" is NOT enough for that. Measured:
+//
+//	pattern      cwd                 GLOB   MatchesCwd
+//	/wt/*-md     /wt/a/b-md          yes    no
+//	/wt/md-*x    /wt/md-a/b/cx       yes    no
+//	*            (anything)          yes    no
+//	/wt/md-*     /wt/md-tracker/sub  yes    yes   <- the accepted shape
+//
+// With the star final, GLOB's cross-'/' reach is exactly what MatchesCwd's
+// ancestor walk reproduces, so live attribution and the retroactive sweep
+// agree. With the star anywhere else they diverge, which means a rule would
+// bill one set of ticks going forward and a different set retroactively.
 func ValidateCwdPattern(pattern string) error {
 	p := strings.TrimRight(pattern, "/")
-	if i := strings.LastIndex(p, "/"); i >= 0 && strings.Contains(p[:i], "*") {
-		return fmt.Errorf("'*' is only allowed in the final path segment: %q", pattern)
+	if p == "" {
+		return fmt.Errorf("cwd pattern is empty: %q", pattern)
+	}
+	if !strings.Contains(p, "/") {
+		return fmt.Errorf("cwd pattern must be a path containing '/': %q", pattern)
+	}
+	if i := strings.Index(p, "*"); i >= 0 && i != len(p)-1 {
+		return fmt.Errorf("'*' is only allowed as the final character of the pattern: %q", pattern)
 	}
 	return nil
 }
