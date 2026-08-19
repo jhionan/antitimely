@@ -15,4 +15,31 @@ func TestParseEnvVar(t *testing.T) {
 	if got := parseEnvVar("", "HERDR_PANE_ID"); got != "" {
 		t.Fatalf("empty output must yield empty string, got %q", got)
 	}
+
+	// Documented limitation, not a bug: ps -Eww does not quote or escape
+	// values, so a value containing whitespace is truncated at the first
+	// space. This assertion pins that contract so a future change to the
+	// parser has to consciously update it rather than silently regress.
+	if got := parseEnvVar("SOMEVAR=foo bar", "SOMEVAR"); got != "foo" {
+		t.Fatalf("value containing whitespace must be truncated at the space, got %q, want %q", got, "foo")
+	}
+
+	// A key that is a strict prefix of another key must not match the
+	// longer key's token: the "key+\"=\"" construction (not "key" alone)
+	// is what prevents FOO from matching inside FOOBAR=2.
+	prefixOut := "FOO=1 FOOBAR=2"
+	if got := parseEnvVar(prefixOut, "FOO"); got != "1" {
+		t.Fatalf("parseEnvVar(%q, %q) = %q, want %q", prefixOut, "FOO", got, "1")
+	}
+	if got := parseEnvVar(prefixOut, "FOOBAR"); got != "2" {
+		t.Fatalf("parseEnvVar(%q, %q) = %q, want %q", prefixOut, "FOOBAR", got, "2")
+	}
+
+	// A variable explicitly set to the empty string returns "" — the same
+	// value returned for an absent variable. That ambiguity is the intended
+	// contract (see ProcessEnvVarReal's doc comment), not tested here as an
+	// error case.
+	if got := parseEnvVar("EMPTY= NEXT=1", "EMPTY"); got != "" {
+		t.Fatalf("empty value must yield empty string, got %q", got)
+	}
 }
