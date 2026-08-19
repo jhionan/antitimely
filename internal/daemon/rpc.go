@@ -589,6 +589,7 @@ func (s *AntitimelyService) PendingReview(args rpcapi.PendingReviewArgs, reply *
 			WindowTitle:   r.WindowTitle,
 			BinaryName:    r.BinaryName,
 			CWD:           r.Cwd,
+			SpaceID:       r.SpaceID,
 			Ticks:         r.Ticks,
 			LastSeenUnix:  lastSeen,
 		})
@@ -635,6 +636,13 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return nil
 	}
 
+	// Read the observation being tagged before opening the transaction: its
+	// space_id scopes the retroactive sweep below.
+	obs, err := s.Q.GetObservation(ctx, args.ObservationID)
+	if err != nil {
+		return fmt.Errorf("observation %d: %w", args.ObservationID, err)
+	}
+
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -679,13 +687,18 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 	// from the diff — see task-7-report.md fix round 2 for the mapping
 	// table this was derived from.
 	//
-	// ProposedRule (built by `atl review`) never sets a space constraint —
-	// only the `rules add` flow does — so the space sentinel is always nil
-	// here, short-circuiting the space_id equality.
+	// The space sentinel is the tagged OBSERVATION's space, not anything the
+	// client sent: observations fork by space, so two visually identical
+	// review rows can exist for the same cwd in different spaces, and a
+	// cwd-only rule swept with a don't-care space clause would retag BOTH
+	// spaces' unassigned ticks into one project — silently undoing the
+	// separation this feature exists to create. An observation with no space
+	// (focus signals, and any work outside herdr) keeps the clause
+	// don't-care, preserving the pre-space behaviour exactly.
 	bundleNull := nullStr(args.Rule.MatchBundleID)
 	titleNull := nullStr(args.Rule.MatchTitleSubstr)
 	binaryNull := nullStr(args.Rule.MatchBinaryName)
-	spaceNull := sql.NullString{}
+	spaceNull := nullStr(obs.SpaceID)
 	cwdNull := nullStr(args.Rule.MatchCWDPrefix)
 
 	var bundleCol2 interface{}

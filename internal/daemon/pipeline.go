@@ -121,8 +121,8 @@ type Pipeline struct {
 	// stale binding there; without this a recycled pid would keep billing
 	// the old process's space.
 	procPane map[int]string
-	lastSnap  *CacheSnapshot
-	perm      *PermissionTracker
+	lastSnap *CacheSnapshot
+	perm     *PermissionTracker
 	// armedAgentStreak counts ticks of matching agent activity (user present)
 	// accumulated by an armed project toward the AutoDisarmAgentTicks
 	// threshold. Reset to zero whenever the project disarms.

@@ -102,6 +102,26 @@ func (r *Resolver) SpaceForSession(uuid string) (Space, bool) {
 	return s, ok
 }
 
+// Space returns the workspace with the given id, if herdr currently knows it.
+// Used for display, so a space that has gone away (or an id typed by hand)
+// simply reports not-known rather than erroring.
+func (r *Resolver) Space(id string) (Space, bool) {
+	if id == "" {
+		return Space{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reloadLocked()
+	s, ok := r.spaces[id]
+	return s, ok
+}
+
+// Path returns the session.json path this resolver reads. NewPipeline
+// deliberately defaults to a resolver with an empty path (resolves nothing,
+// safe in tests), so this is how a test can tell a production-wired daemon
+// pipeline from that inert default.
+func (r *Resolver) Path() string { return r.path }
+
 // Spaces returns every known workspace, ordered by id.
 func (r *Resolver) Spaces() []Space {
 	r.mu.Lock()

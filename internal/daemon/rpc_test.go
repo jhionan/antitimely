@@ -1021,3 +1021,155 @@ func TestRPC_LatestTick(t *testing.T) {
 		t.Errorf("LatestTickUnix = %d, want 2010 (max of inserted ts)", reply.LatestTickUnix)
 	}
 }
+
+// TestRPC_TagSignature_RetroSweepCannotCrossSpaces is the regression test for
+// `atl review` being space-blind. Observations fork by space, so two rows
+// that look identical in the review list can exist for the same cwd in two
+// herdr spaces — which is exactly the case this feature exists to separate
+// (two spaces, same working directory, two different clients). Tagging one of
+// them creates a cwd-only rule; with the retroactive sweep's space clause
+// hard-wired to don't-care, that rule swept BOTH spaces' unassigned ticks
+// into one project and silently billed the other client's time to it.
+func TestRPC_TagSignature_RetroSweepCannotCrossSpaces(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	const cwd = "/Users/rian/work/shared-repo"
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "client-a", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	obsA, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd, SpaceID: "wN", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obsB, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd, SpaceID: "wM", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obsA == obsB {
+		t.Fatal("same cwd in two spaces must be two observations")
+	}
+	for _, ts := range []int64{2000, 2005} {
+		if err := q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsA}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ts := range []int64{3000, 3005, 3010} {
+		if err := q.InsertTick(ctx, store.InsertTickParams{Ts: ts, ObservationID: obsB}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var reply rpcapi.TagSignatureReply
+	if err := client.Call(rpcapi.ServiceName+".TagSignature", rpcapi.TagSignatureArgs{
+		ObservationID: obsA,
+		ProjectName:   "client-a",
+		Rule: &rpcapi.ProposedRule{
+			Priority:        100,
+			MatchBinaryName: "claude",
+			MatchCWDPrefix:  cwd,
+		},
+	}, &reply); err != nil {
+		t.Fatalf("TagSignature: %v", err)
+	}
+	if reply.TicksRetagged != 2 {
+		t.Errorf("TicksRetagged = %d, want 2 (only the tagged space's ticks)", reply.TicksRetagged)
+	}
+
+	var stillUnassigned int
+	row := db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE observation_id = ? AND project_id IS NULL`, obsB)
+	if err := row.Scan(&stillUnassigned); err != nil {
+		t.Fatal(err)
+	}
+	if stillUnassigned != 3 {
+		t.Fatalf("the other space's ticks must stay unassigned, got %d of 3 still unassigned - "+
+			"the retroactive sweep crossed spaces and billed another client's time", stillUnassigned)
+	}
+}
+
+// TestRPC_TagSignature_SpacelessObservationStillSweepsEverything pins the
+// other half of the constraint: work outside herdr has an empty space_id,
+// and for those the sweep must stay space-agnostic, exactly as it behaved before
+// spaces existed. A too-eager space clause here would quietly stop retagging
+// history for every non-herdr signature.
+func TestRPC_TagSignature_SpacelessObservationStillSweepsEverything(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	const cwd = "/Users/rian/work/plain-repo"
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "plain", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	obs1, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd, FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs2, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: cwd + "/sub", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.InsertTick(ctx, store.InsertTickParams{Ts: 2000, ObservationID: obs1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.InsertTick(ctx, store.InsertTickParams{Ts: 2005, ObservationID: obs2}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.TagSignatureReply
+	if err := client.Call(rpcapi.ServiceName+".TagSignature", rpcapi.TagSignatureArgs{
+		ObservationID: obs1,
+		ProjectName:   "plain",
+		Rule: &rpcapi.ProposedRule{
+			Priority:        100,
+			MatchBinaryName: "claude",
+			MatchCWDPrefix:  cwd,
+		},
+	}, &reply); err != nil {
+		t.Fatalf("TagSignature: %v", err)
+	}
+	if reply.TicksRetagged != 2 {
+		t.Fatalf("TicksRetagged = %d, want 2: a spaceless observation must keep the "+
+			"space clause don't-care and retag all matching history", reply.TicksRetagged)
+	}
+}
+
+// TestRPC_PendingReview_CarriesSpaceID pins the review queue's space column
+// end to end: without it two rows for the same cwd in different spaces are
+// indistinguishable in `atl review`, and the user cannot tell which client
+// they are tagging.
+func TestRPC_PendingReview_CarriesSpaceID(t *testing.T) {
+	client, db, _ := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+
+	obsID, err := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/Users/rian/work/x", SpaceID: "wN", FirstSeen: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.InsertTick(ctx, store.InsertTickParams{Ts: 2000, ObservationID: obsID}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply rpcapi.PendingReviewReply
+	if err := client.Call(rpcapi.ServiceName+".PendingReview", rpcapi.PendingReviewArgs{Limit: 10}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Signatures) != 1 {
+		t.Fatalf("want 1 pending signature, got %d", len(reply.Signatures))
+	}
+	if reply.Signatures[0].SpaceID != "wN" {
+		t.Fatalf("SpaceID = %q, want %q", reply.Signatures[0].SpaceID, "wN")
+	}
+}

@@ -24,7 +24,7 @@ FROM ticks
 WHERE project_id IS NULL AND ts >= ? AND ts < ?;
 
 -- name: PendingReviewSignatures :many
-SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd,
+SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd, o.space_id,
        COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
 FROM observations o
 JOIN ticks t ON t.observation_id = o.id
@@ -92,7 +92,7 @@ VALUES (?, ?)
 ON CONFLICT (observation_id) DO NOTHING;
 
 -- name: GetObservation :one
-SELECT id, source, bundle_id, window_title, binary_name, cwd, first_seen
+SELECT id, source, bundle_id, window_title, binary_name, cwd, space_id, first_seen
 FROM observations
 WHERE id = ?;
 

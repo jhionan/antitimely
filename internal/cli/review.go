@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rian/antitimely/internal/domain"
+	"github.com/rian/antitimely/internal/herdr"
 	"github.com/rian/antitimely/internal/rpcapi"
 )
 
@@ -20,6 +21,10 @@ func cmdReview(args []string) int {
 	defer client.Close()
 
 	stdin := bufio.NewScanner(os.Stdin)
+	// One resolver for the whole session: it re-stats session.json per call
+	// and only re-parses when it changed, so reuse costs nothing and picks
+	// up a rename made while reviewing.
+	spaces := herdr.NewResolver(herdr.DefaultSessionPath())
 
 	for {
 		var pending rpcapi.PendingReviewReply
@@ -35,7 +40,7 @@ func cmdReview(args []string) int {
 
 		fmt.Printf("\n%d unassigned signatures:\n", len(pending.Signatures))
 		for i, sig := range pending.Signatures {
-			fmt.Printf("  [%d] %d ticks — %s\n", i+1, sig.Ticks, describeSignature(sig))
+			fmt.Printf("  [%d] %d ticks — %s\n", i+1, sig.Ticks, describeSignature(spaces, sig))
 		}
 		fmt.Printf("\nSelect [1-%d, q to quit]: ", len(pending.Signatures))
 		if !stdin.Scan() {
@@ -57,11 +62,21 @@ func cmdReview(args []string) int {
 	}
 }
 
-func describeSignature(sig rpcapi.Signature) string {
+// describeSignature renders one review row. The space MUST be shown: two
+// observations that are byte-identical apart from their space are two
+// separate rows here, and they can belong to two different clients — without
+// the space the user cannot tell which one they are about to tag.
+func describeSignature(spaces *herdr.Resolver, sig rpcapi.Signature) string {
+	var desc string
 	if sig.Source == "agent" {
-		return fmt.Sprintf("binary=%q cwd=%q", sig.BinaryName, sig.CWD)
+		desc = fmt.Sprintf("binary=%q cwd=%q", sig.BinaryName, sig.CWD)
+	} else {
+		desc = fmt.Sprintf("bundle=%q title=%q", sig.BundleID, sig.WindowTitle)
 	}
-	return fmt.Sprintf("bundle=%q title=%q", sig.BundleID, sig.WindowTitle)
+	if lbl := spaceLabel(spaces, sig.SpaceID); lbl != "" {
+		desc += fmt.Sprintf(" space=%s", lbl)
+	}
+	return desc
 }
 
 func handleOneSignature(client *rpc.Client, stdin *bufio.Scanner, sig rpcapi.Signature) int {

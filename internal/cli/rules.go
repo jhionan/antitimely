@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/rian/antitimely/internal/domain"
+	"github.com/rian/antitimely/internal/herdr"
 	"github.com/rian/antitimely/internal/rpcapi"
 )
 
@@ -98,13 +99,16 @@ func rulesList() int {
 		fmt.Println("(no rules)")
 		return 0
 	}
+	// A bare workspace id ("wN") says nothing about which client a rule
+	// binds; resolve it to "name (id)" whenever herdr still knows the space.
+	spaces := herdr.NewResolver(herdr.DefaultSessionPath())
 	fmt.Printf("%-4s %-3s %-15s %-30s %-30s %-15s %-30s %s\n",
 		"ID", "PRI", "PROJECT", "BUNDLE", "TITLE", "BINARY", "CWD-PREFIX", "SPACE")
 	for _, r := range reply.Items {
 		fmt.Printf("%-4d %-3d %-15s %-30s %-30s %-15s %-30s %s\n",
 			r.ID, r.Priority, r.ProjectName,
 			r.MatchBundleID, r.MatchTitleSubstr,
-			r.MatchBinaryName, r.MatchCWDPrefix, r.MatchSpaceID)
+			r.MatchBinaryName, r.MatchCWDPrefix, spaceLabel(spaces, r.MatchSpaceID))
 	}
 	return 0
 }

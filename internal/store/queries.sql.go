@@ -466,24 +466,14 @@ func (q *Queries) GetInvoiceByID(ctx context.Context, id int64) (Invoice, error)
 }
 
 const getObservation = `-- name: GetObservation :one
-SELECT id, source, bundle_id, window_title, binary_name, cwd, first_seen
+SELECT id, source, bundle_id, window_title, binary_name, cwd, space_id, first_seen
 FROM observations
 WHERE id = ?
 `
 
-type GetObservationRow struct {
-	ID          int64
-	Source      string
-	BundleID    string
-	WindowTitle string
-	BinaryName  string
-	Cwd         string
-	FirstSeen   int64
-}
-
-func (q *Queries) GetObservation(ctx context.Context, id int64) (GetObservationRow, error) {
+func (q *Queries) GetObservation(ctx context.Context, id int64) (Observation, error) {
 	row := q.db.QueryRowContext(ctx, getObservation, id)
-	var i GetObservationRow
+	var i Observation
 	err := row.Scan(
 		&i.ID,
 		&i.Source,
@@ -491,6 +481,7 @@ func (q *Queries) GetObservation(ctx context.Context, id int64) (GetObservationR
 		&i.WindowTitle,
 		&i.BinaryName,
 		&i.Cwd,
+		&i.SpaceID,
 		&i.FirstSeen,
 	)
 	return i, err
@@ -1069,7 +1060,7 @@ func (q *Queries) PauseAllProjects(ctx context.Context) (int64, error) {
 }
 
 const pendingReviewSignatures = `-- name: PendingReviewSignatures :many
-SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd,
+SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd, o.space_id,
        COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
 FROM observations o
 JOIN ticks t ON t.observation_id = o.id
@@ -1087,6 +1078,7 @@ type PendingReviewSignaturesRow struct {
 	WindowTitle string
 	BinaryName  string
 	Cwd         string
+	SpaceID     string
 	Ticks       int64
 	LastSeen    interface{}
 }
@@ -1107,6 +1099,7 @@ func (q *Queries) PendingReviewSignatures(ctx context.Context, limit int64) ([]P
 			&i.WindowTitle,
 			&i.BinaryName,
 			&i.Cwd,
+			&i.SpaceID,
 			&i.Ticks,
 			&i.LastSeen,
 		); err != nil {

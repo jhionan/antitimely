@@ -25,3 +25,19 @@ func cmdSpaces() int {
 	}
 	return 0
 }
+
+// spaceLabel renders a herdr workspace id for display as "name (id)", falling
+// back to the bare id when herdr no longer knows the space or it is unnamed.
+// r may be nil (no herdr state available), in which case the id is shown
+// as-is: an id is always more useful than dropping the column.
+func spaceLabel(r *herdr.Resolver, id string) string {
+	if id == "" {
+		return ""
+	}
+	if r != nil {
+		if s, ok := r.Space(id); ok && s.Name != "" {
+			return fmt.Sprintf("%s (%s)", s.Name, id)
+		}
+	}
+	return id
+}
