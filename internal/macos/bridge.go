@@ -15,6 +15,7 @@ type Bridge interface {
 	IdleSeconds(ctx context.Context) (int, error)
 	ListProcesses(ctx context.Context) ([]ProcessSample, error)
 	ProcessCWD(ctx context.Context, pid int) (string, error)
+	ProcessEnvVar(ctx context.Context, pid int, key string) (string, error)
 }
 
 type FrontmostInfo struct {

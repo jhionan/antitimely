@@ -35,6 +35,14 @@ type FakeBridge struct {
 
 	// CWDErr applies to every pid when set, unless overridden by CWDErrByPID.
 	CWDErr error
+
+	// EnvByPID maps pid -> env key -> value. PIDs and keys absent from the map
+	// return ("", nil), matching the real implementation when the variable is
+	// unset or the process is gone.
+	EnvByPID map[int]map[string]string
+
+	// EnvErr applies to every pid when set.
+	EnvErr error
 }
 
 func (f *FakeBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
@@ -59,6 +67,12 @@ func (f *FakeBridge) ProcessCWD(ctx context.Context, pid int) (string, error) {
 		return "", f.CWDErr
 	}
 	return f.CWDByPID[pid], nil
+}
+func (f *FakeBridge) ProcessEnvVar(ctx context.Context, pid int, key string) (string, error) {
+	if f.EnvErr != nil {
+		return "", f.EnvErr
+	}
+	return f.EnvByPID[pid][key], nil
 }
 
 // Compile-time assertion that *FakeBridge satisfies Bridge.
