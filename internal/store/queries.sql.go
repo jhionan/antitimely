@@ -137,7 +137,11 @@ WHERE project_id IS NULL
       WHERE (? IS NULL OR bundle_id = ?)
         AND (? IS NULL OR window_title LIKE '%' || ? || '%')
         AND (? IS NULL OR binary_name = ?)
-        AND (? IS NULL OR cwd LIKE ? || '%')
+        AND (? IS NULL OR space_id = ?)
+        AND (? IS NULL OR CASE WHEN instr(?, '*') > 0
+                               THEN (cwd GLOB rtrim(?, '/') OR cwd GLOB rtrim(?, '/') || '/*')
+                               ELSE (cwd = rtrim(?, '/') OR cwd LIKE rtrim(?, '/') || '/%')
+                          END)
   )
 `
 
@@ -150,7 +154,13 @@ type ApplyRuleRetroactivelyCountedParams struct {
 	Column6    interface{}
 	BinaryName string
 	Column8    interface{}
-	Column9    sql.NullString
+	SpaceID    string
+	Column10   interface{}
+	INSTR      string
+	RTRIM      string
+	RTRIM_2    string
+	RTRIM_3    string
+	RTRIM_4    string
 }
 
 func (q *Queries) ApplyRuleRetroactivelyCounted(ctx context.Context, arg ApplyRuleRetroactivelyCountedParams) (int64, error) {
@@ -163,7 +173,13 @@ func (q *Queries) ApplyRuleRetroactivelyCounted(ctx context.Context, arg ApplyRu
 		arg.Column6,
 		arg.BinaryName,
 		arg.Column8,
-		arg.Column9,
+		arg.SpaceID,
+		arg.Column10,
+		arg.INSTR,
+		arg.RTRIM,
+		arg.RTRIM_2,
+		arg.RTRIM_3,
+		arg.RTRIM_4,
 	)
 	if err != nil {
 		return 0, err

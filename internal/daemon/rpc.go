@@ -661,13 +661,21 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 	}
 
 	// Build params for ApplyRuleRetroactivelyCounted. sqlc generated
-	// Column2/Column4/Column6/Column8 as the IS NULL sentinels because the
-	// query uses bare "?" placeholders for the null checks; pass the
-	// NullString itself for those (nil when not valid) and the plain string
-	// for the equality operand.
+	// Column2/Column4/Column6/Column8/Column10 as the IS NULL sentinels
+	// because the query uses bare "?" placeholders for the null checks;
+	// pass the NullString itself for those (nil when not valid) and the
+	// plain string for the equality/matching operand. The cwd clause's
+	// CASE also needs the raw pattern for its glob-detect (instr) and its
+	// boundary trim (rtrim) — sqlc names those INSTR/RTRIM/RTRIM_2..4 from
+	// the SQL function calls; all five take the same pattern value.
+	//
+	// ProposedRule (built by `atl review`) never sets a space constraint —
+	// only the `rules add` flow does — so the space sentinel is always nil
+	// here, short-circuiting the space_id equality.
 	bundleNull := nullStr(args.Rule.MatchBundleID)
 	titleNull := nullStr(args.Rule.MatchTitleSubstr)
 	binaryNull := nullStr(args.Rule.MatchBinaryName)
+	spaceNull := sql.NullString{}
 	cwdNull := nullStr(args.Rule.MatchCWDPrefix)
 
 	var bundleCol2 interface{}
@@ -682,9 +690,13 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 	if binaryNull.Valid {
 		binaryCol6 = binaryNull.String
 	}
-	var cwdCol8 interface{}
+	var spaceCol8 interface{}
+	if spaceNull.Valid {
+		spaceCol8 = spaceNull.String
+	}
+	var cwdCol10 interface{}
 	if cwdNull.Valid {
-		cwdCol8 = cwdNull.String
+		cwdCol10 = cwdNull.String
 	}
 
 	count, err := qtx.ApplyRuleRetroactivelyCounted(ctx, store.ApplyRuleRetroactivelyCountedParams{
@@ -695,8 +707,14 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		Column5:    titleNull,
 		Column6:    binaryCol6,
 		BinaryName: args.Rule.MatchBinaryName,
-		Column8:    cwdCol8,
-		Column9:    cwdNull,
+		Column8:    spaceCol8,
+		SpaceID:    spaceNull.String,
+		Column10:   cwdCol10,
+		INSTR:      args.Rule.MatchCWDPrefix,
+		RTRIM:      args.Rule.MatchCWDPrefix,
+		RTRIM_2:    args.Rule.MatchCWDPrefix,
+		RTRIM_3:    args.Rule.MatchCWDPrefix,
+		RTRIM_4:    args.Rule.MatchCWDPrefix,
 	})
 	if err != nil {
 		return err
