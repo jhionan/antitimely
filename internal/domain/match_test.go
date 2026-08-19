@@ -115,3 +115,67 @@ func TestMatchRules_PriorityOrder(t *testing.T) {
 		t.Errorf("expected 100 (priority 50 wins), got %v", got)
 	}
 }
+
+func TestMatchesCwd(t *testing.T) {
+	const wt = "/Users/rian/focaApp/bclouder/daas/daas-back-end/.claude/worktrees"
+	cases := []struct {
+		name    string
+		pattern string
+		cwd     string
+		want    bool
+	}{
+		{"literal exact", wt + "/md-tracker", wt + "/md-tracker", true},
+		{"literal subdir", wt + "/md-tracker", wt + "/md-tracker/DAAS.API", true},
+		{"literal sibling not matched", wt + "/md-tracker", wt + "/md-tracker-scaffold", false},
+		{"literal trailing slash", wt + "/md-tracker/", wt + "/md-tracker/DAAS.API", true},
+		{"glob worktree", wt + "/md-*", wt + "/md-engine", true},
+		{"glob nested build dir", wt + "/md-*", wt + "/md-engine/DAAS.Application.Services.Gos", true},
+		{"glob future worktree", wt + "/md-*", wt + "/md-anything-new", true},
+		{"glob excludes non-md", wt + "/md-*", wt + "/packing-slip-default-assignee", false},
+		{"glob excludes repo root", wt + "/md-*", "/Users/rian/focaApp/bclouder/daas/daas-back-end", false},
+		{"glob excludes worktrees parent", wt + "/md-*", wt, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MatchesCwd(tc.pattern, tc.cwd); got != tc.want {
+				t.Fatalf("MatchesCwd(%q, %q) = %v, want %v", tc.pattern, tc.cwd, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateCwdPattern(t *testing.T) {
+	if err := ValidateCwdPattern("/a/b/md-*"); err != nil {
+		t.Fatalf("star in final segment must be allowed: %v", err)
+	}
+	if err := ValidateCwdPattern("/a/b/c"); err != nil {
+		t.Fatalf("literal must be allowed: %v", err)
+	}
+	if err := ValidateCwdPattern("/a/*/md-x"); err == nil {
+		t.Fatal("star before the last / must be rejected")
+	}
+}
+
+func TestMatchRulesSpaceID(t *testing.T) {
+	space := "wN"
+	daasCwd := "/Users/rian/focaApp/bclouder/daas/"
+	rules := []RuleSpec{
+		{ID: 18, ProjectID: 7, Priority: 100, MatchCwdPrefix: &daasCwd},
+		{ID: 50, ProjectID: 8, Priority: 50, MatchSpaceID: &space},
+	}
+	sig := Signal{
+		Source:  SourceAgent,
+		Cwd:     "/Users/rian/focaApp/bclouder/daas/daas-back-end",
+		SpaceID: "wN",
+	}
+	got := MatchRules(sig, rules)
+	if got == nil || *got != 8 {
+		t.Fatalf("priority-50 space rule must beat priority-100 cwd rule, got %v", got)
+	}
+
+	sig.SpaceID = "wM"
+	got = MatchRules(sig, rules)
+	if got == nil || *got != 7 {
+		t.Fatalf("unbound space must fall through to the cwd rule, got %v", got)
+	}
+}

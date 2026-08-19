@@ -18,6 +18,10 @@ type Signal struct {
 	WindowTitle string
 	BinaryName  string
 	Cwd         string
+	// SpaceID is the herdr workspace id (e.g. "wN") this signal was produced
+	// in, or "" when the work happened outside herdr. Empty never matches a
+	// space-bound rule, so absence degrades to cwd-only attribution.
+	SpaceID string
 }
 
 func (s Signal) IsAgent() bool      { return s.Source == SourceAgent }
@@ -34,6 +38,7 @@ type RuleSpec struct {
 	MatchTitleSubstr *string
 	MatchBinaryName  *string
 	MatchCwdPrefix   *string
+	MatchSpaceID     *string
 }
 
 // ProposedRule is what generalize.go produces — a draft rule for confirmation
@@ -44,6 +49,7 @@ type ProposedRule struct {
 	MatchTitleSubstr *string
 	MatchBinaryName  *string
 	MatchCwdPrefix   *string
+	MatchSpaceID     *string
 }
 
 // Observation is a persisted signal signature, mirroring the observations table.
