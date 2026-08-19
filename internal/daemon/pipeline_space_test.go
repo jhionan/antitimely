@@ -104,3 +104,34 @@ func TestAgentSignalSpaceBoundTracksWithoutCwdMatch(t *testing.T) {
 		t.Fatalf("SpaceID = %q, want %q", sigs[0].SpaceID, "wN")
 	}
 }
+
+// TestAgentSignalSpaceInvalidatedOnPIDReuse is the regression test for
+// finding 1: PID reuse must clear the cached procSpace entry, not just
+// procClass/procActivity, or a recycled pid keeps billing the old process's
+// herdr space.
+func TestAgentSignalSpaceInvalidatedOnPIDReuse(t *testing.T) {
+	const cwd = "/repo/daas-back-end"
+	p, br, _, db := newTestPipeline(t)
+	defer db.Close()
+	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
+	br.CWDByPID = map[int]string{200: cwd}
+
+	// Original process: claude in space wN.
+	br.Processes = []macos.ProcessSample{{PID: 200, Name: "claude", CPUTicks: 0}}
+	br.EnvByPID = map[int]map[string]string{200: {"HERDR_PANE_ID": "wN:p1"}}
+	p.collectAgentSignals(context.Background(), snapWithCwdPattern(cwd), true)
+	br.Processes[0].CPUTicks = 10_000
+	sigs := p.collectAgentSignals(context.Background(), snapWithCwdPattern(cwd), true)
+	if len(sigs) != 1 || sigs[0].SpaceID != "wN" {
+		t.Fatalf("original process: want 1 signal with SpaceID wN, got %+v", sigs)
+	}
+
+	// Same pid reused by an unrelated process in a different space.
+	br.Processes[0].Name = "node"
+	br.Processes[0].CPUTicks = 20_000
+	br.EnvByPID[200]["HERDR_PANE_ID"] = "wM:p1"
+	sigs = p.collectAgentSignals(context.Background(), snapWithCwdPattern(cwd), true)
+	if len(sigs) != 1 || sigs[0].SpaceID != "wM" {
+		t.Fatalf("reused pid: want 1 signal with SpaceID wM (not stale wN), got %+v", sigs)
+	}
+}
