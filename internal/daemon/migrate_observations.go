@@ -71,3 +71,66 @@ func migrateObservationsSourceCheck(db *sql.DB) (retErr error) {
 	}
 	return tx.Commit()
 }
+
+// observationsWithSpaceDDL is the post-space table definition. Kept in sync
+// with schema.sql so a migrated table matches a freshly-created one exactly.
+const observationsWithSpaceDDL = `
+CREATE TABLE observations_new (
+    id              INTEGER PRIMARY KEY,
+    source          TEXT NOT NULL CHECK (source IN ('focus', 'agent', 'transcript')),
+    bundle_id       TEXT NOT NULL DEFAULT '',
+    window_title    TEXT NOT NULL DEFAULT '',
+    binary_name     TEXT NOT NULL DEFAULT '',
+    cwd             TEXT NOT NULL DEFAULT '',
+    space_id        TEXT NOT NULL DEFAULT '',
+    first_seen      INTEGER NOT NULL,
+    UNIQUE (source, bundle_id, window_title, binary_name, cwd, space_id)
+) STRICT;`
+
+// migrateObservationsSpaceID adds space_id and puts it in the UNIQUE key.
+// SQLite cannot alter a UNIQUE in place, so we rebuild. Idempotent, and
+// preserves ids because ticks.observation_id depends on their stability.
+func migrateObservationsSpaceID(db *sql.DB) (retErr error) {
+	var ddl string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='observations'`,
+	).Scan(&ddl)
+	if err == sql.ErrNoRows {
+		return nil // schema.sql will create the new form
+	}
+	if err != nil {
+		return fmt.Errorf("read observations ddl: %w", err)
+	}
+	if strings.Contains(ddl, "space_id") {
+		return nil // already migrated
+	}
+
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("fk off: %w", err)
+	}
+	defer func() {
+		if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil && retErr == nil {
+			retErr = fmt.Errorf("fk on: %w", err)
+		}
+	}()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		observationsWithSpaceDDL,
+		`INSERT INTO observations_new (id, source, bundle_id, window_title, binary_name, cwd, space_id, first_seen)
+		   SELECT id, source, bundle_id, window_title, binary_name, cwd, '', first_seen FROM observations`,
+		`DROP TABLE observations`,
+		`ALTER TABLE observations_new RENAME TO observations`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("rebuild observations for space_id (%.40q): %w", s, err)
+		}
+	}
+	return tx.Commit()
+}

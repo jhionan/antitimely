@@ -67,8 +67,8 @@ func (q *Queries) AddProject(ctx context.Context, arg AddProjectParams) (int64, 
 }
 
 const addRule = `-- name: AddRule :one
-INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
@@ -79,6 +79,7 @@ type AddRuleParams struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 	CreatedAt        int64
 }
 
@@ -90,6 +91,7 @@ func (q *Queries) AddRule(ctx context.Context, arg AddRuleParams) (int64, error)
 		arg.MatchTitleSubstr,
 		arg.MatchBinaryName,
 		arg.MatchCwdPrefix,
+		arg.MatchSpaceID,
 		arg.CreatedAt,
 	)
 	var id int64
@@ -447,9 +449,19 @@ FROM observations
 WHERE id = ?
 `
 
-func (q *Queries) GetObservation(ctx context.Context, id int64) (Observation, error) {
+type GetObservationRow struct {
+	ID          int64
+	Source      string
+	BundleID    string
+	WindowTitle string
+	BinaryName  string
+	Cwd         string
+	FirstSeen   int64
+}
+
+func (q *Queries) GetObservation(ctx context.Context, id int64) (GetObservationRow, error) {
 	row := q.db.QueryRowContext(ctx, getObservation, id)
-	var i Observation
+	var i GetObservationRow
 	err := row.Scan(
 		&i.ID,
 		&i.Source,
@@ -877,7 +889,7 @@ func (q *Queries) ListProjectsWithCompany(ctx context.Context) ([]ListProjectsWi
 
 const listRules = `-- name: ListRules :many
 SELECT r.id, p.name AS project_name, r.priority,
-       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix
+       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix, r.match_space_id
 FROM rules r
 JOIN projects p ON p.id = r.project_id
 ORDER BY r.priority, r.id
@@ -891,6 +903,7 @@ type ListRulesRow struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 }
 
 func (q *Queries) ListRules(ctx context.Context) ([]ListRulesRow, error) {
@@ -910,6 +923,7 @@ func (q *Queries) ListRules(ctx context.Context) ([]ListRulesRow, error) {
 			&i.MatchTitleSubstr,
 			&i.MatchBinaryName,
 			&i.MatchCwdPrefix,
+			&i.MatchSpaceID,
 		); err != nil {
 			return nil, err
 		}
@@ -926,7 +940,7 @@ func (q *Queries) ListRules(ctx context.Context) ([]ListRulesRow, error) {
 
 const listRulesForCache = `-- name: ListRulesForCache :many
 SELECT id, project_id, priority,
-       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix
+       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id
 FROM rules
 ORDER BY priority, id
 `
@@ -939,6 +953,7 @@ type ListRulesForCacheRow struct {
 	MatchTitleSubstr sql.NullString
 	MatchBinaryName  sql.NullString
 	MatchCwdPrefix   sql.NullString
+	MatchSpaceID     sql.NullString
 }
 
 func (q *Queries) ListRulesForCache(ctx context.Context) ([]ListRulesForCacheRow, error) {
@@ -958,6 +973,7 @@ func (q *Queries) ListRulesForCache(ctx context.Context) ([]ListRulesForCacheRow
 			&i.MatchTitleSubstr,
 			&i.MatchBinaryName,
 			&i.MatchCwdPrefix,
+			&i.MatchSpaceID,
 		); err != nil {
 			return nil, err
 		}
@@ -1311,9 +1327,9 @@ func (q *Queries) UnassignedTicksInRange(ctx context.Context, arg UnassignedTick
 }
 
 const upsertObservation = `-- name: UpsertObservation :one
-INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, first_seen)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT (source, bundle_id, window_title, binary_name, cwd)
+INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, space_id, first_seen)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (source, bundle_id, window_title, binary_name, cwd, space_id)
 DO UPDATE SET id = id
 RETURNING id
 `
@@ -1324,6 +1340,7 @@ type UpsertObservationParams struct {
 	WindowTitle string
 	BinaryName  string
 	Cwd         string
+	SpaceID     string
 	FirstSeen   int64
 }
 
@@ -1334,6 +1351,7 @@ func (q *Queries) UpsertObservation(ctx context.Context, arg UpsertObservationPa
 		arg.WindowTitle,
 		arg.BinaryName,
 		arg.Cwd,
+		arg.SpaceID,
 		arg.FirstSeen,
 	)
 	var id int64

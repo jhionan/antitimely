@@ -37,12 +37,14 @@ CREATE TABLE IF NOT EXISTS rules (
     match_title_substr  TEXT,
     match_binary_name   TEXT,
     match_cwd_prefix    TEXT,
+    match_space_id      TEXT,
     created_at          INTEGER NOT NULL,
     CHECK (
         match_bundle_id IS NOT NULL OR
         match_title_substr IS NOT NULL OR
         match_binary_name IS NOT NULL OR
-        match_cwd_prefix IS NOT NULL
+        match_cwd_prefix IS NOT NULL OR
+        match_space_id IS NOT NULL
     )
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority);
@@ -56,8 +58,9 @@ CREATE TABLE IF NOT EXISTS observations (
     window_title    TEXT NOT NULL DEFAULT '',
     binary_name     TEXT NOT NULL DEFAULT '',
     cwd             TEXT NOT NULL DEFAULT '',
+    space_id        TEXT NOT NULL DEFAULT '',
     first_seen      INTEGER NOT NULL,
-    UNIQUE (source, bundle_id, window_title, binary_name, cwd)
+    UNIQUE (source, bundle_id, window_title, binary_name, cwd, space_id)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS ignored_observations (

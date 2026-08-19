@@ -122,6 +122,12 @@ func Run(cfg Config, schemaSQL string) error {
 	if err := migrateObservationsSourceCheck(db); err != nil {
 		return fmt.Errorf("migrate observations source: %w", err)
 	}
+	if err := migrateObservationsSpaceID(db); err != nil {
+		return fmt.Errorf("migrate observations space_id: %w", err)
+	}
+	if err := migrateRulesSpaceID(db); err != nil {
+		return fmt.Errorf("migrate rules match_space_id: %w", err)
+	}
 
 	bridge := &macos.RealBridge{}
 	cache := NewCache()

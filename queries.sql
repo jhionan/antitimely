@@ -1,7 +1,7 @@
 -- name: UpsertObservation :one
-INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, first_seen)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT (source, bundle_id, window_title, binary_name, cwd)
+INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, space_id, first_seen)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (source, bundle_id, window_title, binary_name, cwd, space_id)
 DO UPDATE SET id = id
 RETURNING id;
 
@@ -66,20 +66,20 @@ ORDER BY p.name;
 DELETE FROM projects WHERE name = ?;
 
 -- name: AddRule :one
-INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO rules (project_id, priority, match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: ListRules :many
 SELECT r.id, p.name AS project_name, r.priority,
-       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix
+       r.match_bundle_id, r.match_title_substr, r.match_binary_name, r.match_cwd_prefix, r.match_space_id
 FROM rules r
 JOIN projects p ON p.id = r.project_id
 ORDER BY r.priority, r.id;
 
 -- name: ListRulesForCache :many
 SELECT id, project_id, priority,
-       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix
+       match_bundle_id, match_title_substr, match_binary_name, match_cwd_prefix, match_space_id
 FROM rules
 ORDER BY priority, id;
 
