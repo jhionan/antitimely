@@ -19,6 +19,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/rian/antitimely/internal/herdr"
 	"github.com/rian/antitimely/internal/macos"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
@@ -167,6 +168,7 @@ func Run(cfg Config, schemaSQL string) error {
 		TranscriptRoot:       cfg.TranscriptRoot,
 		TranscriptGraceSec:   cfg.TranscriptGraceSec,
 	})
+	pipeline.herdr = herdr.NewResolver(herdr.DefaultSessionPath())
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 

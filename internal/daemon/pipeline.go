@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/rian/antitimely/internal/domain"
+	"github.com/rian/antitimely/internal/herdr"
 	"github.com/rian/antitimely/internal/macos"
 	"github.com/rian/antitimely/internal/store"
 )
@@ -88,7 +89,17 @@ type Pipeline struct {
 	// cleared on a cache-snapshot swap: busy/idle is a function of observed CPU,
 	// independent of rule changes, so hysteresis state should survive a reload.
 	procActivity map[int]activityState
-	lastSnap     *CacheSnapshot
+	// herdr resolves a HERDR_PANE_ID / Claude session uuid to its herdr
+	// workspace ("space"). NewPipeline defaults this to a Resolver with an
+	// empty path, which resolves nothing but is safe to call — so tests that
+	// never touch herdr don't need to wire one up. daemon.go overwrites this
+	// with a resolver pointed at the real session.json.
+	herdr *herdr.Resolver
+	// procSpace caches pid -> herdr workspace id. A process's environment is
+	// immutable after exec, so one lookup per pid suffices; entries are swept
+	// by the same livePIDs pass that clears prevCPU and procClass.
+	procSpace map[int]string
+	lastSnap  *CacheSnapshot
 	perm      *PermissionTracker
 	// armedAgentStreak counts ticks of matching agent activity (user present)
 	// accumulated by an armed project toward the AutoDisarmAgentTicks
@@ -135,6 +146,8 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 		prevCPU:          map[int]uint64{},
 		procClass:        map[int]procClass{},
 		procActivity:     map[int]activityState{},
+		herdr:            herdr.NewResolver(""),
+		procSpace:        map[int]string{},
 		armedAgentStreak: map[int64]int{},
 		transcriptState:  map[string]transcriptSession{},
 	}
@@ -211,6 +224,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			WindowTitle: sig.WindowTitle,
 			BinaryName:  sig.BinaryName,
 			Cwd:         sig.Cwd,
+			SpaceID:     sig.SpaceID,
 			FirstSeen:   now,
 		})
 		if err != nil {
@@ -446,6 +460,11 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				delete(p.procActivity, pid)
 			}
 		}
+		for pid := range p.procSpace {
+			if !livePIDs[pid] {
+				delete(p.procSpace, pid)
+			}
+		}
 	}()
 
 	procs, err := p.bridge.ListProcesses(ctx)
@@ -511,6 +530,25 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 			continue
 		}
 
+		// Resolve the herdr space once per pid, ahead of the track decision
+		// below: a process in a rule-bound space must be tracked even when
+		// its cwd matches no pattern, so track can't be computed without it.
+		// A process's environment is immutable after exec, so a cached hit
+		// (empty or not) is never re-probed for the life of the pid.
+		spaceID, ok := p.procSpace[proc.PID]
+		if !ok {
+			paneID, err := p.bridge.ProcessEnvVar(ctx, proc.PID, "HERDR_PANE_ID")
+			if err != nil {
+				// A failed probe must not drop the signal — it just degrades
+				// this pid to cwd-only matching for its lifetime.
+				log.Printf("env pid=%d: %v", proc.PID, err)
+			}
+			if s, resolved := p.herdr.SpaceForPane(paneID); resolved {
+				spaceID = s.ID
+			}
+			p.procSpace[proc.PID] = spaceID
+		}
+
 		cached, ok := p.procClass[proc.PID]
 		if !ok {
 			cwd, err := p.bridge.ProcessCWD(ctx, proc.PID)
@@ -523,9 +561,11 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				continue
 			}
 			cached = procClass{
-				name:  proc.Name,
-				cwd:   cwd,
-				track: snap.AllowedBinaries[proc.Name] || cwdMatchesAnyPattern(cwd, snap.CwdPatterns),
+				name: proc.Name,
+				cwd:  cwd,
+				track: snap.AllowedBinaries[proc.Name] ||
+					cwdMatchesAnyPattern(cwd, snap.CwdPatterns) ||
+					(spaceID != "" && snap.BoundSpaceIDs[spaceID]),
 			}
 			p.procClass[proc.PID] = cached
 		}
@@ -538,6 +578,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 			Source:     domain.SourceAgent,
 			BinaryName: proc.Name,
 			Cwd:        cached.cwd,
+			SpaceID:    spaceID,
 		})
 	}
 

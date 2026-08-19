@@ -125,10 +125,15 @@ func (p *Pipeline) collectTranscriptSignals(snap *CacheSnapshot, now int64) []do
 				continue
 			}
 			sessionID := e.Name()[:len(e.Name())-len(".jsonl")]
+			spaceID := ""
+			if s, ok := p.herdr.SpaceForSession(sessionID); ok {
+				spaceID = s.ID
+			}
 			out = append(out, domain.Signal{
 				Source:      domain.SourceTranscript,
 				Cwd:         cwd,
 				WindowTitle: sessionID,
+				SpaceID:     spaceID,
 			})
 		}
 	}

@@ -356,6 +356,10 @@ func (s *AntitimelyService) ReloadCache() error {
 			v := r.MatchCwdPrefix.String
 			spec.MatchCwdPrefix = &v
 		}
+		if r.MatchSpaceID.Valid {
+			v := r.MatchSpaceID.String
+			spec.MatchSpaceID = &v
+		}
 		snap.Rules = append(snap.Rules, spec)
 	}
 	pausedIDs, err := s.Q.ListPausedProjectIDs(ctx)
@@ -383,6 +387,15 @@ func (s *AntitimelyService) ReloadCache() error {
 		}
 		seenPattern[p] = struct{}{}
 		snap.CwdPatterns = append(snap.CwdPatterns, p)
+	}
+	// Set of herdr workspace ids referenced by any rule, so the agent
+	// pipeline can track a process in a rule-bound space even when its cwd
+	// matches no pattern.
+	for _, r := range snap.Rules {
+		if r.MatchSpaceID == nil || *r.MatchSpaceID == "" {
+			continue
+		}
+		snap.BoundSpaceIDs[*r.MatchSpaceID] = true
 	}
 	s.Cache.StorePreservingRuntime(snap)
 	return nil
