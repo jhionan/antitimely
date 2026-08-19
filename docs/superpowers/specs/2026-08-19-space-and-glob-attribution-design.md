@@ -57,7 +57,7 @@ Corrections have so far required hand-written SQL, because both retroactive quer
   information without depending on an undocumented protocol or on herdr running.
 - **No automatic retagging of historical ticks.** Existing attribution stays as-is;
   2026-08-18 and 2026-08-19 were already corrected by hand.
-- **No general glob engine.** `*` is supported only in the final path segment (see below).
+- **No general glob engine.** `*` is supported only as the FINAL CHARACTER of a cwd pattern (see below).
 
 ## Design
 
@@ -67,9 +67,10 @@ Both additions are new clauses in `domain.matchOne`. Rule ordering — priority 
 then id ascending — is unchanged, so no new precedence concept is introduced.
 
 **Glob in `match_cwd_prefix`.** A value containing `*` is treated as a pattern. The star is
-permitted **only in the final path segment**; a pattern with `*` before the last `/` is
-rejected at creation time. A pattern matches when it matches the cwd itself or any
-ancestor directory of it, always at `/` boundaries:
+permitted **only as the final character** of the pattern (any trailing `/` is trimmed
+first), and a pattern with no `/` at all is rejected; anything else is rejected at creation
+time, by the CLI and by the `RuleAdd` RPC handler alike. A pattern matches when it matches
+the cwd itself or any ancestor directory of it, always at `/` boundaries:
 
     pattern  .../daas-back-end/.claude/worktrees/md-*
       .../worktrees/md-engine                                  match
@@ -83,9 +84,20 @@ run several levels below the worktree root.
 
 Values without `*` keep exactly today's behaviour.
 
-The last-segment restriction is not arbitrary. SQLite's `GLOB` lets `*` cross `/`, while
-Go's `path.Match` does not. Confining the star to the final segment is what keeps the Go
-matcher and the SQL clause provably in agreement rather than subtly divergent.
+The star-last restriction is not arbitrary. SQLite's `GLOB` lets `*` cross `/`, while Go's
+`path.Match` does not; `MatchesCwd` recovers exactly that reach — and only that reach — by
+also testing every ancestor directory. Measured against both engines:
+
+    pattern     cwd                    GLOB   MatchesCwd
+    /wt/*-md    /wt/a/b-md             match  no match
+    /wt/md-*x   /wt/md-a/b/cx          match  no match
+    *           (anything)             match  no match
+    /wt/md-*    /wt/md-tracker/sub     match  match      <- the permitted shape
+
+So "star anywhere in the last segment" is NOT sufficient: only a star in final position
+keeps the Go matcher and the SQL clause provably in agreement rather than subtly
+divergent — and a divergent rule bills one set of ticks live and a different set
+retroactively.
 
 **`match_space_id`.** A new rule column holding a herdr workspace id (for example `wN`),
 compared for exact equality against the signal's `space_id`.

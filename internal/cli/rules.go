@@ -41,7 +41,7 @@ func rulesAdd(args []string) int {
 	bundle := fs.String("bundle", "", "match bundle id exactly")
 	title := fs.String("title", "", "match window title substring")
 	binary := fs.String("binary", "", "match binary name exactly")
-	cwd := fs.String("cwd", "", "match cwd prefix, or a glob with * in the final segment")
+	cwd := fs.String("cwd", "", "match cwd prefix, or a glob whose * is the final character")
 	space := fs.String("space", "", "match herdr workspace id (see: antitimely spaces)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
