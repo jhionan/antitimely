@@ -84,7 +84,9 @@ func (r *Resolver) SpaceForPane(paneID string) (Space, bool) {
 }
 
 // SpaceForSession resolves a Claude Code session uuid to the workspace whose
-// pane reported it.
+// pane reported it. The binding outlives the pane's *current* session: once
+// learned it is kept across reloads, so a rotated session whose transcript is
+// still emitting keeps resolving to the space it ran in.
 func (r *Resolver) SpaceForSession(uuid string) (Space, bool) {
 	if uuid == "" {
 		return Space{}, false
@@ -113,7 +115,9 @@ func (r *Resolver) Spaces() []Space {
 	return out
 }
 
-// reloadLocked re-parses the file when it has changed. If session.json is
+// reloadLocked re-parses the file when it has changed. Workspaces are
+// replaced wholesale by what the file currently says; session uuid bindings
+// are accumulated across successful reloads (see below). If session.json is
 // missing, unreadable, or fails to parse, the resolver fails closed: it
 // discards any previously loaded spaces/sessions (so a stale mapping is never
 // served after herdr exits or the file is briefly truncated/corrupt) and
@@ -144,7 +148,27 @@ func (r *Resolver) reloadLocked() {
 		return
 	}
 	spaces := make(map[string]Space, len(f.Workspaces))
-	sessions := map[string]string{}
+	// Session bindings ACCUMULATE across successful reloads instead of being
+	// replaced. herdr records only each pane's CURRENT agent_session, so a
+	// session that rotates (--resume, compaction, a new session started in
+	// the same pane) disappears from the file while its transcript keeps
+	// emitting for the whole grace window. Rebuilding the map from scratch
+	// dropped that binding, so those still-live seconds fell back to cwd
+	// matching — another client's project — while the new session billed the
+	// right one, putting the same second in two timesheets. A Claude session
+	// uuid belongs to exactly one pane for its lifetime, so keeping an
+	// already-learned binding is sound; a later file that names the uuid
+	// again simply overwrites it with the same (or newer) workspace.
+	//
+	// This does not weaken the fail-closed contract: failClosedLocked still
+	// wipes this map wholesale, so a missing or unparseable session.json
+	// resolves nothing, learned bindings included. Only successful reloads
+	// retain. Growth is bounded by the number of distinct Claude sessions
+	// observed during one daemon lifetime (tens per day, a uuid each).
+	sessions := r.sessions
+	if sessions == nil {
+		sessions = map[string]string{}
+	}
 	for _, w := range f.Workspaces {
 		if w.ID == "" {
 			continue
