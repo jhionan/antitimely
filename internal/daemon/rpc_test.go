@@ -241,6 +241,78 @@ func TestRPC_RulesListDelete(t *testing.T) {
 	}
 }
 
+// TestRPC_RuleAdd covers the RuleAdd handler added for `atl rules add`:
+// direct rule creation (unlike TagSignature, not tied to an observation).
+func TestRPC_RuleAdd(t *testing.T) {
+	client, db, cache := setupRPCServer(t)
+	ctx := context.Background()
+	q := store.New(db)
+	if _, err := q.AddProject(ctx, store.AddProjectParams{Name: "MD-Tracker", CreatedAt: 1000}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A space-only rule (no cwd/bundle/title/binary) must be accepted: the
+	// rules table's CHECK constraint was widened specifically to permit a
+	// rule whose only match field is match_space_id, and nothing else in
+	// this suite proves that end to end through the RPC layer.
+	var reply rpcapi.RuleAddReply
+	if err := client.Call(rpcapi.ServiceName+".RuleAdd", rpcapi.RuleAddArgs{
+		ProjectName:  "MD-Tracker",
+		Priority:     100,
+		MatchSpaceID: "wN",
+	}, &reply); err != nil {
+		t.Fatalf("RuleAdd (space-only): %v", err)
+	}
+	if reply.ID == 0 {
+		t.Fatal("expected a nonzero rule id")
+	}
+
+	var storedSpace sql.NullString
+	row := db.QueryRow(`SELECT match_space_id FROM rules WHERE id = ?`, reply.ID)
+	if err := row.Scan(&storedSpace); err != nil {
+		t.Fatal(err)
+	}
+	if !storedSpace.Valid || storedSpace.String != "wN" {
+		t.Errorf("stored match_space_id = %+v, want wN", storedSpace)
+	}
+
+	// The new rule must be visible in the cache snapshot immediately, with
+	// no SIGHUP / separate ReloadCache call — that's what RuleAdd calling
+	// ReloadCache itself before returning is for. Assert against the
+	// snapshot, not just the database: that's the behaviour users depend on.
+	found := false
+	for _, r := range cache.Snapshot().Rules {
+		if r.ID == reply.ID {
+			found = true
+			if r.MatchSpaceID == nil || *r.MatchSpaceID != "wN" {
+				t.Errorf("cached rule MatchSpaceID = %v, want wN", r.MatchSpaceID)
+			}
+		}
+	}
+	if !found {
+		t.Error("new rule not present in cache snapshot right after RuleAdd (ReloadCache did not run)")
+	}
+
+	// An unknown project must error and create nothing.
+	var badReply rpcapi.RuleAddReply
+	err := client.Call(rpcapi.ServiceName+".RuleAdd", rpcapi.RuleAddArgs{
+		ProjectName:   "NoSuchProject",
+		Priority:      100,
+		MatchBundleID: "com.test.foo",
+	}, &badReply)
+	if err == nil {
+		t.Fatalf("expected an error for an unknown project, got nil (id=%d)", badReply.ID)
+	}
+
+	var count int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM rules WHERE match_bundle_id = 'com.test.foo'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected no rule created for the unknown project, found %d", count)
+	}
+}
+
 func TestRPC_Report(t *testing.T) {
 	client, db, _ := setupRPCServer(t)
 	ctx := context.Background()
