@@ -79,6 +79,19 @@ var invoiceCreditMigrations = []string{
 }
 
 // Run boots the daemon and blocks until SIGINT/SIGTERM.
+// newDaemonPipeline builds the Pipeline the daemon actually runs. It exists
+// so that the one line switching herdr space attribution ON in production —
+// pointing the resolver at the real session.json — is reachable from a test.
+// NewPipeline deliberately defaults to a resolver with an empty path (it
+// resolves nothing, so tests need no herdr state), which means dropping this
+// wiring would silently disable space attribution with every test still
+// green. TestDaemonPipelineUsesRealHerdrSessionPath is that assertion.
+func newDaemonPipeline(q *store.Queries, bridge macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
+	p := NewPipeline(q, bridge, cache, cfg)
+	p.herdr = herdr.NewResolver(herdr.DefaultSessionPath())
+	return p
+}
+
 func Run(cfg Config, schemaSQL string) error {
 	if schemaSQL == "" {
 		return errors.New("schema is empty")
@@ -157,7 +170,7 @@ func Run(cfg Config, schemaSQL string) error {
 			autoDisarmTicks = n
 		}
 	}
-	pipeline := NewPipeline(q, bridge, cache, PipelineConfig{
+	pipeline := newDaemonPipeline(q, bridge, cache, PipelineConfig{
 		IdleThresholdSec:     cfg.IdleThresholdSec,
 		CPUDeltaThresh:       cfg.AgentCPUThresh,
 		CPUDeltaThreshIdle:   cfg.AgentCPUThreshIdle,
@@ -168,7 +181,6 @@ func Run(cfg Config, schemaSQL string) error {
 		TranscriptRoot:       cfg.TranscriptRoot,
 		TranscriptGraceSec:   cfg.TranscriptGraceSec,
 	})
-	pipeline.herdr = herdr.NewResolver(herdr.DefaultSessionPath())
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 
