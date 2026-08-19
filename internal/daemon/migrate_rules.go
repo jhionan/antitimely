@@ -31,20 +31,51 @@ CREATE TABLE rules_new (
 // migrateRulesSpaceID adds match_space_id and widens the CHECK so a space-only
 // rule is legal. SQLite cannot alter a CHECK in place, so we rebuild. Nothing
 // references rules, so only its own ids need preserving.
-func migrateRulesSpaceID(db *sql.DB) error {
-	var ddl string
-	err := db.QueryRow(
-		`SELECT sql FROM sqlite_master WHERE type='table' AND name='rules'`,
-	).Scan(&ddl)
-	if err == sql.ErrNoRows {
+//
+// "Already migrated" is checked structurally: the match_space_id column must
+// exist (via pragma_table_info, not a DDL substring match) AND the live DDL
+// must contain the widened CHECK clause text "match_space_id IS NOT NULL" —
+// a CHECK isn't exposed via pragmas, so this half stays a text check, but a
+// specific one instead of a bare column-name search.
+func migrateRulesSpaceID(db *sql.DB) (retErr error) {
+	var exists int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rules'`,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("check rules table: %w", err)
+	}
+	if exists == 0 {
 		return nil
 	}
+
+	hasColumn, err := columnExists(db, "rules", "match_space_id")
 	if err != nil {
-		return fmt.Errorf("read rules ddl: %w", err)
+		return err
 	}
-	if strings.Contains(ddl, "match_space_id") {
-		return nil
+	if hasColumn {
+		var ddl string
+		if err := db.QueryRow(
+			`SELECT sql FROM sqlite_master WHERE type='table' AND name='rules'`,
+		).Scan(&ddl); err != nil {
+			return fmt.Errorf("read rules ddl: %w", err)
+		}
+		if strings.Contains(ddl, "match_space_id IS NOT NULL") {
+			return nil // already migrated: column present AND CHECK widened
+		}
 	}
+
+	// Symmetric with the observations rebuild: rules.project_id is itself a
+	// FK into projects, and enforcement must not be able to fail the swap
+	// (and thus block the daemon from ever starting) over a pre-existing
+	// dangling reference.
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("fk off: %w", err)
+	}
+	defer func() {
+		if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil && retErr == nil {
+			retErr = fmt.Errorf("fk on: %w", err)
+		}
+	}()
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -52,12 +83,18 @@ func migrateRulesSpaceID(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
+	matchSpaceIDExpr := "NULL"
+	if hasColumn {
+		matchSpaceIDExpr = "match_space_id"
+	}
+
 	stmts := []string{
+		`DROP TABLE IF EXISTS rules_new`,
 		rulesWithSpaceDDL,
-		`INSERT INTO rules_new (id, project_id, priority, match_bundle_id, match_title_substr,
+		fmt.Sprintf(`INSERT INTO rules_new (id, project_id, priority, match_bundle_id, match_title_substr,
 		                        match_binary_name, match_cwd_prefix, match_space_id, created_at)
 		   SELECT id, project_id, priority, match_bundle_id, match_title_substr,
-		          match_binary_name, match_cwd_prefix, NULL, created_at FROM rules`,
+		          match_binary_name, match_cwd_prefix, %s, created_at FROM rules`, matchSpaceIDExpr),
 		`DROP TABLE rules`,
 		`ALTER TABLE rules_new RENAME TO rules`,
 		`CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority)`,
