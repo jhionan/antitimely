@@ -106,9 +106,11 @@ WHERE project_id IS NULL
         AND (? IS NULL OR window_title LIKE '%' || ? || '%')
         AND (? IS NULL OR binary_name = ?)
         AND (? IS NULL OR space_id = ?)
-        AND (? IS NULL OR CASE WHEN instr(?, '*') > 0
-                               THEN (cwd GLOB rtrim(?, '/') OR cwd GLOB rtrim(?, '/') || '/*')
-                               ELSE (cwd = rtrim(?, '/') OR cwd LIKE rtrim(?, '/') || '/%')
+        AND (? IS NULL OR CASE WHEN rtrim(?, '/') = ''
+                               THEN 0
+                               WHEN instr(?, '*') > 0
+                                    THEN (cwd GLOB rtrim(?, '/') OR cwd GLOB rtrim(?, '/') || '/*')
+                               ELSE (cwd = rtrim(?, '/') OR substr(cwd, 1, length(rtrim(?, '/')) + 1) = rtrim(?, '/') || '/')
                           END)
   );
 

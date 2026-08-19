@@ -664,10 +664,20 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 	// Column2/Column4/Column6/Column8/Column10 as the IS NULL sentinels
 	// because the query uses bare "?" placeholders for the null checks;
 	// pass the NullString itself for those (nil when not valid) and the
-	// plain string for the equality/matching operand. The cwd clause's
-	// CASE also needs the raw pattern for its glob-detect (instr) and its
-	// boundary trim (rtrim) — sqlc names those INSTR/RTRIM/RTRIM_2..4 from
-	// the SQL function calls; all five take the same pattern value.
+	// plain string for the equality/matching operand.
+	//
+	// The cwd clause's CASE has four arms sharing the same raw pattern —
+	// "is it empty after rtrim" (RTRIM), "does it contain a glob" (INSTR),
+	// the glob match (RTRIM_2, RTRIM_3), and the byte-exact literal-prefix
+	// match (RTRIM_4, RTRIM_5, RTRIM_6) — so sqlc emits seven fields for
+	// what is conceptually one value. EVERY ONE of RTRIM/INSTR/RTRIM_2..6
+	// must be fed args.Rule.MatchCWDPrefix, unmodified: the SQL does its
+	// own rtrim, so passing anything else here (or skipping one) would
+	// silently desync the glob-detect from the match itself. If this
+	// clause's placeholder count ever changes again, recompute the
+	// mapping placeholder-by-placeholder from queries.sql, don't guess
+	// from the diff — see task-7-report.md fix round 2 for the mapping
+	// table this was derived from.
 	//
 	// ProposedRule (built by `atl review`) never sets a space constraint —
 	// only the `rules add` flow does — so the space sentinel is always nil
@@ -710,11 +720,13 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		Column8:    spaceCol8,
 		SpaceID:    spaceNull.String,
 		Column10:   cwdCol10,
-		INSTR:      args.Rule.MatchCWDPrefix,
 		RTRIM:      args.Rule.MatchCWDPrefix,
+		INSTR:      args.Rule.MatchCWDPrefix,
 		RTRIM_2:    args.Rule.MatchCWDPrefix,
 		RTRIM_3:    args.Rule.MatchCWDPrefix,
 		RTRIM_4:    args.Rule.MatchCWDPrefix,
+		RTRIM_5:    args.Rule.MatchCWDPrefix,
+		RTRIM_6:    args.Rule.MatchCWDPrefix,
 	})
 	if err != nil {
 		return err
