@@ -38,7 +38,7 @@ The daemon runs under launchd (`com.rian.antitimely`). `make rebuild` cycles it;
 
 **Data model & the dedup rule that matters most.** An `observation` is a unique `(source, bundle_id, window_title, binary_name, cwd)` fingerprint, stored once. A `tick` is `(ts, observation_id, project_id)` on a 5-second grid; PK `(ts, observation_id)`. A project's hours = `COUNT(DISTINCT ts) × 5s`. **Company-level billable dedups across projects** — a second worked on two projects at once bills once. This deduped total is what `atl invoice generate` charges; a plain per-project sum (all hours worked) is higher. Do not confuse the two (see gotchas).
 
-**Rule matching** (`internal/domain/match.go`, pure/zero-dep): first rule (by priority, then age) whose every set field matches wins. cwd prefix is literal `cwd == prefix || cwd startsWith prefix+"/"` (case-sensitive); bundle id / binary exact; window title substring. `atl review` creates a rule **and** retroactively retags all matching past ticks in one transaction (`TagSignature` in rpc.go: `AddRule` + `ApplyRuleRetroactivelyCounted` + `ReloadCache`); `IgnoreSignature` is the sibling that marks an observation ignored instead of tagging it.
+**Rule matching** (`internal/domain/match.go`, pure/zero-dep): first rule (by priority, then age) whose every set field matches wins. cwd prefix is literal `cwd == prefix || cwd startsWith prefix+"/"` (case-sensitive), unless the value ends in `*`, which makes it a glob matched against the cwd and each ancestor directory (`domain.MatchesCwd`); bundle id / binary exact; window title substring; `match_space_id` exact-matches the herdr workspace id resolved from the process's `HERDR_PANE_ID`, which is the only way to separate two spaces sharing one cwd. `atl review` creates a rule **and** retroactively retags all matching past ticks in one transaction (`TagSignature` in rpc.go: `AddRule` + `ApplyRuleRetroactivelyCounted` + `ReloadCache`); `IgnoreSignature` is the sibling that marks an observation ignored instead of tagging it.
 
 **Layers:**
 ```
@@ -47,6 +47,7 @@ internal/store/    sqlc-GENERATED SQLite bindings — never hand-edit; edit sche
 internal/macos/    the ONLY place subprocesses live (osascript/ps/lsof/ioreg); fake.go for tests
 internal/daemon/   pipeline, poller, cache, RPC handlers, WAL checkpointer, lifecycle
 internal/invoice/  invoice numbering, line items, formatting, PDF rendering (`atl invoice generate`)
+internal/herdr/    parses herdr's session.json to resolve panes and Claude sessions to spaces (fails closed)
 internal/rpcapi/   shared net/rpc request/reply types
 internal/cli/      hand-rolled subcommand dispatch + interactive menu
 ```

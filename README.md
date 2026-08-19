@@ -95,13 +95,14 @@ An agent process is tracked if **either** its binary is allowlisted **or** its w
 
 ### Turning an observation into a project
 
-Each unique `(source, bundle id, window title, binary name, cwd)` tuple is stored once as an observation; thousands of ticks then reference that single row. To attribute it, the daemon runs your **rules** in order (priority, then age) and takes the first whose every set field matches:
+Each unique `(source, bundle id, window title, binary name, cwd, space id)` tuple is stored once as an observation; thousands of ticks then reference that single row. To attribute it, the daemon runs your **rules** in order (priority, then age) and takes the first whose every set field matches:
 
-- **cwd prefix** — the process's working directory equals, or is a subdirectory of, the rule's path (matched literally — casing must match the real folder)
+- **cwd prefix** — the process's working directory equals, or is a subdirectory of, the rule's path (matched literally — casing must match the real folder). A `*` as the pattern's **final character** makes it a glob over the last path segment, so `.../worktrees/md-*` matches every current and future `md-` worktree and anything nested inside it
+- **herdr space** — the [herdr](https://github.com/) workspace the process was launched in, resolved from its `HERDR_PANE_ID`. This is the only field that can separate two spaces sharing one working directory; see `atl spaces` for the ids
 - **bundle id** / **binary name** — exact match
 - **window title** — substring match
 
-`atl review` builds these rules for you: it surfaces observations that ticked but matched no rule (their raw fingerprints, called *signatures*) and proposes a cwd prefix. Tagging a signature writes the rule **and** retroactively re-credits every past tick that matches — in one transaction.
+`atl review` builds these rules for you: it surfaces observations that ticked but matched no rule (their raw fingerprints, called *signatures*) and proposes a cwd prefix. Tagging a signature writes the rule **and** retroactively re-credits past ticks that match — in one transaction. The retroactive sweep only ever fills in ticks that are still unassigned, and it is scoped to the tagged observation's herdr space, so tagging one space's work cannot silently re-credit another's.
 
 ### Idle, pausing, and what finally gets stored
 
@@ -242,6 +243,8 @@ Precedence: defaults → config file → CLI flags on `atl daemon`.
 | `atl` | interactive menu (TTY-aware; piped invocations fall back to usage) |
 | `atl status [--once]` | live self-refreshing view (every 5s) of grouped totals + daemon uptime, idle, permission state; Esc/Ctrl-C exits. In a terminal it refreshes in place; `--once` (or piped output) prints a single snapshot and exits |
 | `atl review` | walk through unassigned observations, tag them, build rules |
+| `atl rules list\|add\|delete` | list, create, or remove rules; `add` takes `--project --priority --bundle --title --binary --cwd --space` |
+| `atl spaces` | list herdr spaces and their ids, for use with `rules add --space` |
 | `atl report [--from --to]` | date-range totals |
 | `atl summary [--from --to] [--project --company] [--all-authors] [--txt]` | markdown report: hours + git commits per project |
 | `atl company add\|list\|delete <name>` | manage companies |
