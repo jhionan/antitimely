@@ -99,7 +99,18 @@ func (p *Pipeline) collectTranscriptSignals(snap *CacheSnapshot, now int64) []do
 			if fi.Size() < st.offset {
 				st.offset = 0
 			}
-			if fi.Size() > st.offset {
+			if now-fi.ModTime().Unix() >= grace {
+				// A session untouched for longer than the grace window cannot
+				// carry a turn recent enough to count: an entry is written at
+				// or before the mtime it produces, so the grace gate below
+				// would drop it whatever the body says. Mark the bytes
+				// consumed without reading them. Parsing them anyway is what
+				// made every daemon restart re-read every transcript ever
+				// written from byte 0 (311MB / 6.7s measured on 2026-08-24),
+				// stalling the tick loop and the single SQLite connection the
+				// CLI shares with it.
+				st.offset = fi.Size()
+			} else if fi.Size() > st.offset {
 				if data, err := readFrom(path, st.offset); err == nil {
 					if cwd, newest, ok := parseTranscriptTail(data); ok {
 						if newest > st.lastActivity {
