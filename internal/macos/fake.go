@@ -1,6 +1,9 @@
 package macos
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // FakeBridge is an in-memory test implementation of Bridge. All fields are
 // public so tests can mutate state between calls.
@@ -19,6 +22,9 @@ type FakeBridge struct {
 
 	IdleSecondsVal int
 	IdleErr        error
+	// IdleDelay makes IdleSeconds block before returning, so tests can build
+	// a tick that overruns its budget without depending on machine speed.
+	IdleDelay time.Duration
 
 	Processes    []ProcessSample
 	ProcessesErr error
@@ -58,6 +64,9 @@ func (f *FakeBridge) FocusedWindowTitle(ctx context.Context) (string, error) {
 	return f.FocusedTitle, f.FocusedTitleErr
 }
 func (f *FakeBridge) IdleSeconds(ctx context.Context) (int, error) {
+	if f.IdleDelay > 0 {
+		time.Sleep(f.IdleDelay)
+	}
 	return f.IdleSecondsVal, f.IdleErr
 }
 func (f *FakeBridge) ListProcesses(ctx context.Context) ([]ProcessSample, error) {

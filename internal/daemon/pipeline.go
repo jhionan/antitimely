@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/rian/antitimely/internal/domain"
 	"github.com/rian/antitimely/internal/herdr"
@@ -42,6 +44,32 @@ type PipelineConfig struct {
 	// seconds after its newest turn, stitching gaps between turns into one
 	// continuous billable block.
 	TranscriptGraceSec int
+	// TickBudget is how long one tick may take before it is reported as slow.
+	// Set it to the poll interval: past that the tracker is skipping billable
+	// seconds outright (a stall on 2026-08-24 recorded 2 ticks in 6 minutes
+	// and left nothing in the log to explain it). Zero disables the report.
+	TickBudget time.Duration
+}
+
+// tickPhases records how long each stage of one tick took. Every stage is a
+// separate failure mode in production - osascript hanging, lsof being killed,
+// a transcript re-read, the single SQLite connection being contended - so the
+// slow-tick report names them individually rather than quoting one total.
+type tickPhases struct {
+	idle       time.Duration
+	focus      time.Duration
+	agent      time.Duration
+	transcript time.Duration
+	write      time.Duration
+}
+
+func (t tickPhases) String() string {
+	return fmt.Sprintf("idle=%s focus=%s agent=%s transcript=%s write=%s",
+		t.idle.Round(time.Millisecond),
+		t.focus.Round(time.Millisecond),
+		t.agent.Round(time.Millisecond),
+		t.transcript.Round(time.Millisecond),
+		t.write.Round(time.Millisecond))
 }
 
 // procClass is what the agent loop remembers about a PID after its first
@@ -144,6 +172,13 @@ type Pipeline struct {
 	// transcriptState is per-session-file tail/offset + last-activity state,
 	// keyed by absolute .jsonl path.
 	transcriptState map[string]transcriptSession
+	// slowTickRetryAt is the earliest unix-second at which another slow-tick
+	// line may be logged; slowTickBackoffSec is the current quiet window,
+	// doubled per report and cleared by the first tick back inside budget.
+	// Same shape as titleRetryAt/titleBackoffSec above, and for the same
+	// reason: daemon.err is append-only.
+	slowTickRetryAt    int64
+	slowTickBackoffSec int64
 }
 
 // Backoff policy for the window-title osascript — the only remaining call that
@@ -160,6 +195,13 @@ const (
 	// osascripts vs 85 title denials), so they must back off too — but a lone
 	// timeout under momentary load shouldn't blind title capture for a minute.
 	osascriptTimeoutStreak = 3
+)
+
+// Backoff policy for the slow-tick report, mirroring the title constants
+// above: the first repeat is quiet for a minute, growing to five.
+const (
+	slowTickBackoffStartSec int64 = 60
+	slowTickBackoffMaxSec   int64 = 300
 )
 
 func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
@@ -185,6 +227,10 @@ func (p *Pipeline) SetPermissionTracker(pt *PermissionTracker) {
 // RunTick executes one observation cycle. now is the unix-epoch seconds of
 // this tick.
 func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
+	var ph tickPhases
+	tickStart := time.Now()
+	defer func() { p.reportSlowTick(ph, time.Since(tickStart), now) }()
+
 	snap := p.cache.Snapshot()
 	// Snapshot is swapped wholesale on every ReloadCache, so a pointer
 	// change is sufficient evidence that rules or the allowlist may have
@@ -195,7 +241,9 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		p.lastSnap = snap
 	}
 
+	phaseStart := time.Now()
 	idle, err := p.bridge.IdleSeconds(ctx)
+	ph.idle = time.Since(phaseStart)
 	// Fail open: if we can't read idle state, assume the user is present.
 	// The previous "userPresent = false on error" default silently flipped
 	// the agent CPU threshold to the much stricter idle bar, so a broken
@@ -215,16 +263,24 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	var signals []domain.Signal
 
 	if userPresent {
+		phaseStart = time.Now()
 		if sig, ok := p.collectFocusSignal(ctx, snap, now); ok {
 			signals = append(signals, sig)
 		}
+		ph.focus = time.Since(phaseStart)
 	}
+	phaseStart = time.Now()
 	signals = append(signals, p.collectAgentSignals(ctx, snap, userPresent)...)
+	ph.agent = time.Since(phaseStart)
+	phaseStart = time.Now()
 	signals = append(signals, p.collectTranscriptSignals(snap, now)...)
+	ph.transcript = time.Since(phaseStart)
 
 	if len(signals) == 0 {
 		return nil
 	}
+	phaseStart = time.Now()
+	defer func() { ph.write = time.Since(phaseStart) }()
 
 	// Per-tick local state for the arming gate. snap.ArmedProjects is the
 	// start-of-tick view; once we auto-disarm a project mid-tick we must treat
@@ -382,6 +438,49 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 // number of seconds capture is suppressed for, so callers can log it. The
 // interval starts at titleDenyBackoffSec and doubles per successive failure up
 // to titleBackoffMaxSec; a successful probe resets it.
+// reportSlowTick logs one line when a tick overran its budget, naming where
+// the time went. A tick that outlives the poll interval is billable seconds
+// going unrecorded, and until now that happened silently: the 2026-08-24 stall
+// (2 ticks in 6 minutes, every RPC hitting the 10s handler deadline) left
+// nothing in daemon.err but the downstream lsof/osascript kills it caused.
+//
+// Repeats back off exactly like the window-title probe (see backOffTitle):
+// daemon.err is append-only and already megabytes, so a lasting pathology -
+// every tick overrunning - must not add a line every 5s forever. A tick that
+// finishes inside its budget ends the incident and clears the backoff, so the
+// next problem is reported at once rather than swallowed by an open window.
+func (p *Pipeline) reportSlowTick(ph tickPhases, took time.Duration, now int64) {
+	if p.cfg.TickBudget <= 0 {
+		return
+	}
+	if took <= p.cfg.TickBudget {
+		p.slowTickBackoffSec = 0
+		p.slowTickRetryAt = 0
+		return
+	}
+	if now < p.slowTickRetryAt {
+		return
+	}
+	log.Printf("slow tick: took %s (budget %s) %s",
+		took.Round(time.Millisecond), p.cfg.TickBudget, ph)
+	p.backOffSlowTick(now)
+}
+
+// backOffSlowTick grows the quiet window after a reported slow tick: 60s, then
+// doubling to a 5-minute cap.
+func (p *Pipeline) backOffSlowTick(now int64) {
+	switch {
+	case p.slowTickBackoffSec == 0:
+		p.slowTickBackoffSec = slowTickBackoffStartSec
+	case p.slowTickBackoffSec < slowTickBackoffMaxSec:
+		p.slowTickBackoffSec *= 2
+	}
+	if p.slowTickBackoffSec > slowTickBackoffMaxSec {
+		p.slowTickBackoffSec = slowTickBackoffMaxSec
+	}
+	p.slowTickRetryAt = now + p.slowTickBackoffSec
+}
+
 func (p *Pipeline) backOffTitle(now int64) int64 {
 	switch {
 	case p.titleBackoffSec == 0:

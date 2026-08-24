@@ -79,6 +79,41 @@ var invoiceCreditMigrations = []string{
 }
 
 // Run boots the daemon and blocks until SIGINT/SIGTERM.
+// pipelineConfigFor translates the daemon's on-disk config into the pipeline's
+// tuning knobs. Extracted from Run so the derived values below — the
+// auto-disarm threshold and the slow-tick budget, neither of which is a
+// straight copy of a config field — can be pinned by tests.
+func pipelineConfigFor(cfg Config) PipelineConfig {
+	// Auto-disarm an armed project after ~60s of sustained, user-present agent
+	// activity in its directory — long enough to ignore a transient blip, short
+	// enough that a broken focus-disarm path never silently eats much time.
+	autoDisarmTicks := 12
+	if cfg.IntervalSeconds > 0 {
+		if n := 60 / cfg.IntervalSeconds; n > 0 {
+			autoDisarmTicks = n
+		}
+	}
+	// A tick is over budget once it outlives the interval it is polled at:
+	// past that point the next tick is already due and seconds go unrecorded.
+	// No interval ⇒ no budget ⇒ the report stays off.
+	var tickBudget time.Duration
+	if cfg.IntervalSeconds > 0 {
+		tickBudget = time.Duration(cfg.IntervalSeconds) * time.Second
+	}
+	return PipelineConfig{
+		IdleThresholdSec:     cfg.IdleThresholdSec,
+		CPUDeltaThresh:       cfg.AgentCPUThresh,
+		CPUDeltaThreshIdle:   cfg.AgentCPUThreshIdle,
+		AutoDisarmAgentTicks: autoDisarmTicks,
+		AgentBusyRiseTicks:   cfg.AgentBusyRiseTicks,
+		AgentBusyFallTicks:   cfg.AgentBusyFallTicks,
+		TranscriptTracking:   cfg.TranscriptTracking,
+		TranscriptRoot:       cfg.TranscriptRoot,
+		TranscriptGraceSec:   cfg.TranscriptGraceSec,
+		TickBudget:           tickBudget,
+	}
+}
+
 // newDaemonPipeline builds the Pipeline the daemon actually runs. It exists
 // so that the one line switching herdr space attribution ON in production —
 // pointing the resolver at the real session.json — is reachable from a test.
@@ -161,26 +196,7 @@ func Run(cfg Config, schemaSQL string) error {
 		return fmt.Errorf("initial cache load: %w", err)
 	}
 
-	// Auto-disarm an armed project after ~60s of sustained, user-present agent
-	// activity in its directory — long enough to ignore a transient blip, short
-	// enough that a broken focus-disarm path never silently eats much time.
-	autoDisarmTicks := 12
-	if cfg.IntervalSeconds > 0 {
-		if n := 60 / cfg.IntervalSeconds; n > 0 {
-			autoDisarmTicks = n
-		}
-	}
-	pipeline := newDaemonPipeline(q, bridge, cache, PipelineConfig{
-		IdleThresholdSec:     cfg.IdleThresholdSec,
-		CPUDeltaThresh:       cfg.AgentCPUThresh,
-		CPUDeltaThreshIdle:   cfg.AgentCPUThreshIdle,
-		AutoDisarmAgentTicks: autoDisarmTicks,
-		AgentBusyRiseTicks:   cfg.AgentBusyRiseTicks,
-		AgentBusyFallTicks:   cfg.AgentBusyFallTicks,
-		TranscriptTracking:   cfg.TranscriptTracking,
-		TranscriptRoot:       cfg.TranscriptRoot,
-		TranscriptGraceSec:   cfg.TranscriptGraceSec,
-	})
+	pipeline := newDaemonPipeline(q, bridge, cache, pipelineConfigFor(cfg))
 	pipeline.SetPermissionTracker(pt)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 
