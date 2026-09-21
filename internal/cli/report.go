@@ -63,5 +63,11 @@ func cmdReport(args []string) int {
 	if reply.Unassigned > 0 {
 		fmt.Printf("  %-30s %s\n", "(unassigned)", time.Duration(reply.Unassigned)*time.Second)
 	}
+	if len(reply.Companies) > 0 {
+		fmt.Println("By company (deduped):")
+		for _, ct := range reply.Companies {
+			fmt.Printf("  %-30s %s\n", ct.Name, time.Duration(ct.BillableSeconds)*time.Second)
+		}
+	}
 	return 0
 }

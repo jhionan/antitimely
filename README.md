@@ -245,7 +245,7 @@ Precedence: defaults → config file → CLI flags on `atl daemon`.
 | `atl review` | walk through unassigned observations, tag them, build rules |
 | `atl rules list\|add\|delete` | list, create, or remove rules; `add` takes `--project --priority --bundle --title --binary --cwd --space` |
 | `atl spaces` | list herdr spaces and their ids, for use with `rules add --space` |
-| `atl report [--from --to]` | date-range totals |
+| `atl report [--from --to]` | date-range totals, plus per-company deduped hours (parallel work on two projects of one company bills once) |
 | `atl summary [--from --to] [--project --company] [--all-authors] [--txt]` | markdown report: hours + git commits per project |
 | `atl company add\|list\|delete <name>` | manage companies |
 | `atl project add [--company=<c>] <name>` | manage projects |

@@ -341,6 +341,49 @@ func TestRPC_Report(t *testing.T) {
 	if rep.Unassigned != 10 { // 2 ticks * 5s
 		t.Errorf("Unassigned = %d, want 10", rep.Unassigned)
 	}
+
+	// Company dedup: two AlphaCo projects sharing seconds bill that second
+	// once per company; the company-less foca-api rolls into "(no company)",
+	// sorted last (Status's convention).
+	coID, _ := q.AddCompany(ctx, store.AddCompanyParams{Name: "AlphaCo", CreatedAt: 0})
+	alpha1 := id(t, db, `INSERT INTO projects (name, company_id, created_at) VALUES ('alpha-1', ?, 0) RETURNING id`, coID)
+	alpha2 := id(t, db, `INSERT INTO projects (name, company_id, created_at) VALUES ('alpha-2', ?, 0) RETURNING id`, coID)
+	obsA, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/a", FirstSeen: 0,
+	})
+	obsB, _ := q.UpsertObservation(ctx, store.UpsertObservationParams{
+		Source: "agent", BinaryName: "claude", Cwd: "/b", FirstSeen: 0,
+	})
+	for _, tick := range []struct{ ts, obs, proj int64 }{
+		{100, obsA, alpha1}, {100, obsB, alpha2}, // shared second across AlphaCo projects
+		{105, obsB, alpha2},
+		{400, obsA, alpha1},
+	} {
+		_ = q.InsertTick(ctx, store.InsertTickParams{Ts: tick.ts, ObservationID: tick.obs,
+			ProjectID: sql.NullInt64{Int64: tick.proj, Valid: true}})
+	}
+
+	var rep2 rpcapi.ReportReply
+	if err := client.Call(rpcapi.ServiceName+".Report", args, &rep2); err != nil {
+		t.Fatal(err)
+	}
+	// AlphaCo: distinct ts {100, 105, 400} = 3 * 5s. "(no company)": foca-api's
+	// distinct ts {100, 105, 110} = 3 * 5s; ts 100/105 are shared with AlphaCo
+	// work but billed per company, so each company counts its own.
+	if len(rep2.Companies) != 2 ||
+		rep2.Companies[0].Name != "AlphaCo" || rep2.Companies[0].BillableSeconds != 15 ||
+		rep2.Companies[1].Name != "(no company)" || rep2.Companies[1].BillableSeconds != 15 {
+		t.Errorf("Companies = %+v, want [AlphaCo 15 (no company) 15]", rep2.Companies)
+	}
+}
+
+func id(t *testing.T, db *sql.DB, query string, args ...any) int64 {
+	t.Helper()
+	var n int64
+	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	return n
 }
 
 func TestRPC_InvoiceSendListDelete(t *testing.T) {

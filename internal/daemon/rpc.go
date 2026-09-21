@@ -853,6 +853,37 @@ func (s *AntitimelyService) Report(args rpcapi.ReportArgs, reply *rpcapi.ReportR
 		return err
 	}
 	reply.Unassigned = unassigned * int64(s.TickIntervalSeconds)
+
+	// Per-company deduped seconds, same COUNT(DISTINCT ts) convention as the
+	// Status rollup (a second worked on two projects of one company bills
+	// once). Projects with no company roll into one "(no company)" row,
+	// sorted last to match Status.
+	coRows, err := s.Q.CompanyDedupTotalsInRange(ctx, store.CompanyDedupTotalsInRangeParams{Ts: args.FromUnix, Ts_2: args.ToUnix})
+	if err != nil {
+		return err
+	}
+	var noCompany *rpcapi.CompanyTotals
+	var companies []*rpcapi.CompanyTotals
+	for _, r := range coRows {
+		ct := &rpcapi.CompanyTotals{
+			BillableSeconds: r.TickCount * int64(s.TickIntervalSeconds),
+		}
+		if !r.Name.Valid {
+			ct.Name = "(no company)"
+			noCompany = ct
+		} else {
+			ct.Name = r.Name.String
+			companies = append(companies, ct)
+		}
+	}
+	sort.Slice(companies, func(i, j int) bool { return companies[i].Name < companies[j].Name })
+	if noCompany != nil {
+		companies = append(companies, noCompany)
+	}
+	reply.Companies = make([]rpcapi.CompanyTotals, len(companies))
+	for i, ct := range companies {
+		reply.Companies[i] = *ct
+	}
 	return nil
 }
 

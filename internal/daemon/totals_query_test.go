@@ -112,3 +112,85 @@ func TestTotalsByProjectSinceSkipsOrphanedTicks(t *testing.T) {
 		}
 	}
 }
+
+// Two projects of one company working the same second must bill that second
+// once; the same second spent in a different company counts for each company.
+// Projects with no company roll into one bucket whose row has a NULL name.
+func TestCompanyDedupTotalsInRangeBillsSharedSecondsOncePerCompany(t *testing.T) {
+	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(loadSchema(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := func(query string, args ...any) {
+		if _, err := db.Exec(query, args...); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	id := func(query string, args ...any) int64 {
+		var n int64
+		if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return n
+	}
+
+	co1 := id(`INSERT INTO companies (name, created_at) VALUES ('Co1', 0) RETURNING id`)
+	co2 := id(`INSERT INTO companies (name, created_at) VALUES ('Co2', 0) RETURNING id`)
+	p1 := id(`INSERT INTO projects (name, company_id, created_at) VALUES ('P1', ?, 0) RETURNING id`, co1)
+	p2 := id(`INSERT INTO projects (name, company_id, created_at) VALUES ('P2', ?, 0) RETURNING id`, co1)
+	p3 := id(`INSERT INTO projects (name, company_id, created_at) VALUES ('P3', ?, 0) RETURNING id`, co2)
+	p4 := id(`INSERT INTO projects (name, created_at) VALUES ('P4', 0) RETURNING id`)
+
+	obs := func(cwd string) int64 {
+		return id(`INSERT INTO observations (source, binary_name, cwd, first_seen)
+			VALUES ('agent', 'claude', ?, 0) RETURNING id`, cwd)
+	}
+	o1, o2, o3, o4 := obs("/1"), obs("/2"), obs("/3"), obs("/4")
+
+	tick := func(ts, obsID, proj any) {
+		exec(`INSERT INTO ticks (ts, observation_id, project_id) VALUES (?, ?, ?)`, ts, obsID, proj)
+	}
+	// Co1: two projects sharing the same second — one billable second.
+	tick(100, o1, p1)
+	tick(100, o2, p2)
+	tick(105, o1, p1)
+	// Co2: its own company's distinct second, same ts as Co1 work.
+	tick(100, o3, p3)
+	// Company-less project: the "(no company)" bucket.
+	tick(105, o4, p4)
+	// Outside [60, 800): must be excluded.
+	tick(50, o1, p1)
+	tick(900, o1, p1)
+
+	q := store.New(db)
+	rows, err := q.CompanyDedupTotalsInRange(context.Background(), store.CompanyDedupTotalsInRangeParams{Ts: 60, Ts_2: 800})
+	if err != nil {
+		t.Fatalf("CompanyDedupTotalsInRange: %v", err)
+	}
+
+	got := map[string]int64{}
+	for _, r := range rows {
+		name := "(no company)"
+		if r.Name.Valid {
+			name = r.Name.String
+		}
+		if _, dup := got[name]; dup {
+			t.Fatalf("duplicate company row %q (%+v): GROUP BY leaked a second bucket", name, r)
+		}
+		got[name] = r.TickCount
+	}
+	want := map[string]int64{"Co1": 2, "Co2": 1, "(no company)": 1}
+	if len(got) != len(want) {
+		t.Fatalf("got %d company rows %v, want %d %v", len(got), got, len(want), want)
+	}
+	for name, n := range want {
+		if got[name] != n {
+			t.Errorf("company %q: got %d distinct seconds, want %d", name, got[name], n)
+		}
+	}
+}

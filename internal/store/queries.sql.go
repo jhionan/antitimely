@@ -288,6 +288,55 @@ func (q *Queries) CompanyCreditRows(ctx context.Context, arg CompanyCreditRowsPa
 	return items, nil
 }
 
+const companyDedupTotalsInRange = `-- name: CompanyDedupTotalsInRange :many
+SELECT c.id, c.name, COUNT(DISTINCT t.ts) AS tick_count
+FROM ticks t
+JOIN projects p ON p.id = t.project_id
+LEFT JOIN companies c ON c.id = p.company_id
+WHERE t.ts >= ? AND t.ts < ?
+GROUP BY c.id, c.name
+`
+
+type CompanyDedupTotalsInRangeParams struct {
+	Ts   int64
+	Ts_2 int64
+}
+
+type CompanyDedupTotalsInRangeRow struct {
+	ID        sql.NullInt64
+	Name      sql.NullString
+	TickCount int64
+}
+
+// Company-level deduped seconds (COUNT(DISTINCT ts)) over a report range,
+// the same convention as the Status rollup: a second worked on two projects
+// of one company is billed once. LEFT JOIN keeps projects with no company in
+// the result; their c.name comes back NULL and the caller labels the row
+// "(no company)". No paused filter: pause stops NEW ticks at write time, so
+// historical ticks here are real work.
+func (q *Queries) CompanyDedupTotalsInRange(ctx context.Context, arg CompanyDedupTotalsInRangeParams) ([]CompanyDedupTotalsInRangeRow, error) {
+	rows, err := q.db.QueryContext(ctx, companyDedupTotalsInRange, arg.Ts, arg.Ts_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CompanyDedupTotalsInRangeRow{}
+	for rows.Next() {
+		var i CompanyDedupTotalsInRangeRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.TickCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countDistinctCompanyTicksSince = `-- name: CountDistinctCompanyTicksSince :one
 SELECT COUNT(DISTINCT t.ts) AS tick_count
 FROM ticks t

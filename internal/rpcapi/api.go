@@ -297,6 +297,11 @@ type ReportArgs struct {
 type ReportReply struct {
 	Totals     map[string]int64
 	Unassigned int64
+	// Companies holds per-company deduped seconds over the report range:
+	// COUNT(DISTINCT ts) per company, so a second worked on two projects of
+	// one company appears once. Only Name and BillableSeconds are populated;
+	// LastInvoiceUnix/Projects are Status concepts and stay zero here.
+	Companies []CompanyTotals
 }
 
 // --- Summary ---

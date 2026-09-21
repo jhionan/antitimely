@@ -23,6 +23,20 @@ SELECT COUNT(DISTINCT ts) AS tick_count
 FROM ticks
 WHERE project_id IS NULL AND ts >= ? AND ts < ?;
 
+-- name: CompanyDedupTotalsInRange :many
+-- Company-level deduped seconds (COUNT(DISTINCT ts)) over a report range,
+-- the same convention as the Status rollup: a second worked on two projects
+-- of one company is billed once. LEFT JOIN keeps projects with no company in
+-- the result; their c.name comes back NULL and the caller labels the row
+-- "(no company)". No paused filter: pause stops NEW ticks at write time, so
+-- historical ticks here are real work.
+SELECT c.id, c.name, COUNT(DISTINCT t.ts) AS tick_count
+FROM ticks t
+JOIN projects p ON p.id = t.project_id
+LEFT JOIN companies c ON c.id = p.company_id
+WHERE t.ts >= ? AND t.ts < ?
+GROUP BY c.id, c.name;
+
 -- name: PendingReviewSignatures :many
 SELECT o.id, o.source, o.bundle_id, o.window_title, o.binary_name, o.cwd, o.space_id,
        COUNT(t.ts) AS ticks, COALESCE(MAX(t.ts), 0) AS last_seen
