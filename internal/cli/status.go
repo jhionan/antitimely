@@ -84,7 +84,8 @@ func renderStatus(w io.Writer, reply rpcapi.StatusReply) {
 		if co.LastInvoiceUnix != 0 {
 			since = time.Unix(co.LastInvoiceUnix, 0).Local().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(w, "  %-38s %s   (since: %s)\n", co.Name, fmtDuration(co.BillableSeconds), since)
+		fmt.Fprintf(w, "  %-38s %s   (today dedup: %s, since: %s)\n",
+			co.Name, fmtDuration(co.BillableSeconds), fmtDuration(co.TodaySeconds), since)
 		renderProjects(w, co.Projects)
 		fmt.Fprintln(w)
 	}
@@ -93,7 +94,8 @@ func renderStatus(w io.Writer, reply rpcapi.StatusReply) {
 		if co.Name != "(no company)" {
 			continue
 		}
-		fmt.Fprintf(w, "  %-38s %s\n", "(no company)", fmtDuration(co.BillableSeconds))
+		fmt.Fprintf(w, "  %-38s %s   (today dedup: %s)\n",
+			"(no company)", fmtDuration(co.BillableSeconds), fmtDuration(co.TodaySeconds))
 		renderProjects(w, co.Projects)
 		fmt.Fprintln(w)
 	}

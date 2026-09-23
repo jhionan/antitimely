@@ -21,6 +21,9 @@ func sampleReply() rpcapi.StatusReply {
 				Name:            "BClouder",
 				LastInvoiceUnix: 0,
 				BillableSeconds: 3600,
+				// Company today is the deduped COUNT(DISTINCT ts), deliberately
+				// not the sum of the project rows below.
+				TodaySeconds: 2700,
 				Projects: []rpcapi.ProjectTotals{
 					{Name: "Daas", BillableSeconds: 3600, TodaySeconds: 3600},
 					{Name: "Rumo", BillableSeconds: 0, TodaySeconds: 0, Paused: true},
@@ -30,6 +33,7 @@ func sampleReply() rpcapi.StatusReply {
 			{
 				Name:            "(no company)",
 				BillableSeconds: 600,
+				TodaySeconds:    60,
 				Projects:        []rpcapi.ProjectTotals{{Name: "Solo", BillableSeconds: 600, TodaySeconds: 60}},
 			},
 		},
@@ -46,8 +50,9 @@ func TestRenderStatusCoversBranches(t *testing.T) {
 	for _, want := range []string{
 		"Idle: 1m5s", "Tick: 5s", "Uptime: 1h0m0s",
 		"Today: 2h0m0s total tracked",
-		"BClouder", "Daas", "(paused)", "(armed: needs focus — 5m0s NOT counted!)",
-		"(no company)", "Solo",
+		"BClouder", "(today dedup: 45m0s, since: never)",
+		"Daas", "(paused)", "(armed: needs focus — 5m0s NOT counted!)",
+		"(no company)", "(today dedup: 1m0s)", "Solo",
 		"(unassigned)", "3 signature(s), run `antitimely review`",
 	} {
 		if !strings.Contains(out, want) {
