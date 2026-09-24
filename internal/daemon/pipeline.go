@@ -65,15 +65,37 @@ type tickPhases struct {
 	agent      time.Duration
 	transcript time.Duration
 	write      time.Duration
+	// The write phase is split further because "write=13s" alone can't tell
+	// the single connection being held elsewhere (an RPC, the checkpointer)
+	// from a statement that is itself slow (disk, a SQLite lock under
+	// busy_timeout). connWait is the growth of database/sql's cumulative
+	// WaitDuration across the phase - time queued for the one connection, by
+	// this tick or any concurrent caller. slowest is the longest single
+	// statement, pool wait included.
+	connWait time.Duration
+	stmts    int
+	slowest  time.Duration
 }
 
 func (t tickPhases) String() string {
-	return fmt.Sprintf("idle=%s focus=%s agent=%s transcript=%s write=%s",
+	return fmt.Sprintf("idle=%s focus=%s agent=%s transcript=%s write=%s (conn-wait=%s stmts=%d slowest=%s)",
 		t.idle.Round(time.Millisecond),
 		t.focus.Round(time.Millisecond),
 		t.agent.Round(time.Millisecond),
 		t.transcript.Round(time.Millisecond),
-		t.write.Round(time.Millisecond))
+		t.write.Round(time.Millisecond),
+		t.connWait.Round(time.Millisecond),
+		t.stmts,
+		t.slowest.Round(time.Millisecond))
+}
+
+// timeStmt records one write-phase statement that started at start.
+func (t *tickPhases) timeStmt(start time.Time) {
+	d := time.Since(start)
+	t.stmts++
+	if d > t.slowest {
+		t.slowest = d
+	}
 }
 
 // procClass is what the agent loop remembers about a PID after its first
@@ -191,6 +213,9 @@ type Pipeline struct {
 	// reason: daemon.err is append-only.
 	slowTickRetryAt    int64
 	slowTickBackoffSec int64
+	// dbStats reads the connection pool's counters for the slow-tick report.
+	// Nil (tests) leaves conn-wait at zero.
+	dbStats func() sql.DBStats
 }
 
 // Backoff policy for the window-title osascript — the only remaining call that
@@ -235,6 +260,12 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 // to the RPC Status response. If not called, permission state is not updated.
 func (p *Pipeline) SetPermissionTracker(pt *PermissionTracker) {
 	p.perm = pt
+}
+
+// SetDBStats wires the pool counters that let a slow-tick report separate
+// waiting for the single connection from executing on it.
+func (p *Pipeline) SetDBStats(f func() sql.DBStats) {
+	p.dbStats = f
 }
 
 // RunTick executes one observation cycle. now is the unix-epoch seconds of
@@ -293,7 +324,16 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		return nil
 	}
 	phaseStart = time.Now()
-	defer func() { ph.write = time.Since(phaseStart) }()
+	var waitBefore time.Duration
+	if p.dbStats != nil {
+		waitBefore = p.dbStats().WaitDuration
+	}
+	defer func() {
+		ph.write = time.Since(phaseStart)
+		if p.dbStats != nil {
+			ph.connWait = p.dbStats().WaitDuration - waitBefore
+		}
+	}()
 
 	// Per-tick local state for the arming gate. snap.ArmedProjects is the
 	// start-of-tick view; once we auto-disarm a project mid-tick we must treat
@@ -309,6 +349,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	tickedThisTick := map[int64]bool{}
 
 	for _, sig := range signals {
+		stmtStart := time.Now()
 		obsID, err := p.q.UpsertObservation(ctx, store.UpsertObservationParams{
 			Source:      string(sig.Source),
 			BundleID:    sig.BundleID,
@@ -318,11 +359,14 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 			SpaceID:     sig.SpaceID,
 			FirstSeen:   now,
 		})
+		ph.timeStmt(stmtStart)
 		if err != nil {
 			log.Printf("upsert obs: %v", err)
 			continue
 		}
+		stmtStart = time.Now()
 		ignored, err := p.q.IsObservationIgnored(ctx, obsID)
+		ph.timeStmt(stmtStart)
 		if err != nil {
 			log.Printf("check ignored: %v", err)
 			continue
@@ -433,9 +477,12 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 		if pid != nil {
 			projectID = sql.NullInt64{Int64: *pid, Valid: true}
 		}
-		if err := p.q.InsertTick(ctx, store.InsertTickParams{
+		stmtStart = time.Now()
+		err = p.q.InsertTick(ctx, store.InsertTickParams{
 			Ts: now, ObservationID: obsID, ProjectID: projectID,
-		}); err != nil {
+		})
+		ph.timeStmt(stmtStart)
+		if err != nil {
 			log.Printf("insert tick: %v", err)
 			continue
 		}

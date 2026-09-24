@@ -205,6 +205,7 @@ func Run(cfg Config, schemaSQL string) error {
 
 	pipeline := newDaemonPipeline(q, bridge, cache, pipelineConfigFor(cfg))
 	pipeline.SetPermissionTracker(pt)
+	pipeline.SetDBStats(db.Stats)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 
 	listener, err := acquireSocket(cfg.SocketPath, cfg.PIDPath)
