@@ -9,15 +9,20 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
-// ListProcessesReal shells out to `ps -A -o pid=,comm=,time=` and parses one
+// ListProcessesReal shells out to `ps -A -o pid=,time=,comm=` and parses one
 // row per process. CPU time is converted from MM:SS.HH (or HH:MM:SS) into
 // centiseconds.
+//
+// comm must stay the LAST column: ps pads every earlier column to a fixed
+// width and truncates comm there to 16 bytes, which cut the Claude desktop
+// app's full executable path down to "/Users/rian/Libr".
 func ListProcessesReal(ctx context.Context) ([]ProcessSample, error) {
 	cctx, cancel := withTimeout(ctx, psDeadline)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "ps", "-A", "-o", "pid=", "-o", "comm=", "-o", "time=")
+	cmd := exec.CommandContext(cctx, "ps", "-A", "-o", "pid=", "-o", "time=", "-o", "comm=")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
@@ -33,28 +38,12 @@ func ListProcessesReal(ctx context.Context) ([]ProcessSample, error) {
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		sample, ok := parsePSLine(line)
+		if !ok {
 			skipped++
 			continue
 		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			skipped++
-			continue
-		}
-		timeField := fields[len(fields)-1]
-		comm := strings.Join(fields[1:len(fields)-1], " ")
-		comm = filepath.Base(comm)
-
-		cs, err := parseCPUTime(timeField)
-		if err != nil {
-			skipped++
-			continue
-		}
-		samples = append(samples, ProcessSample{
-			PID: pid, Name: comm, CPUTicks: cs,
-		})
+		samples = append(samples, sample)
 	}
 	if skipped > 0 {
 		// One line per call (not per row) so a permanent format change is
@@ -62,6 +51,65 @@ func ListProcessesReal(ctx context.Context) ([]ProcessSample, error) {
 		log.Printf("ps: skipped %d unparseable row(s)", skipped)
 	}
 	return samples, scanner.Err()
+}
+
+// parsePSLine parses one "pid time comm" row. comm is everything after the
+// time column, kept verbatim because executable paths contain spaces
+// ("Application Support").
+func parsePSLine(line string) (ProcessSample, bool) {
+	pidField, rest := cutField(line)
+	timeField, comm := cutField(rest)
+	if comm == "" {
+		return ProcessSample{}, false
+	}
+	pid, err := strconv.Atoi(pidField)
+	if err != nil {
+		return ProcessSample{}, false
+	}
+	cs, err := parseCPUTime(timeField)
+	if err != nil {
+		return ProcessSample{}, false
+	}
+	return ProcessSample{PID: pid, Name: binaryName(comm), CPUTicks: cs}, true
+}
+
+// cutField splits off the first whitespace-delimited field of s.
+func cutField(s string) (field, rest string) {
+	s = strings.TrimLeft(s, " \t")
+	i := strings.IndexAny(s, " \t")
+	if i < 0 {
+		return s, ""
+	}
+	return s[:i], strings.TrimSpace(s[i:])
+}
+
+// maxTitleLen caps a process title used as a binary name: long enough to still
+// read what the process is doing ("ng test --watch=false --browsers=..."),
+// short enough that one agent's sprawling command line can't bloat the
+// observation key.
+const maxTitleLen = 64
+
+// binaryName turns ps's comm into the name the allowlist, observations and
+// rules key on. comm is either an executable path
+// ("/opt/homebrew/Cellar/dotnet/10.0.400/libexec/dotnet") or a process title
+// a program set on itself ("ng serve --port 4200",
+// "npm exec @playwright/mcp@latest").
+//
+// Only a path is reduced to its base name: running filepath.Base over a title
+// turns "npm exec @playwright/mcp@latest" into "mcp@latest". A title is kept
+// whole, first word included, so "ng serve" and "ng test" stay distinct.
+func binaryName(comm string) string {
+	if strings.HasPrefix(comm, "/") || strings.HasPrefix(comm, "./") || strings.HasPrefix(comm, "../") {
+		return filepath.Base(comm)
+	}
+	if len(comm) <= maxTitleLen {
+		return comm
+	}
+	cut := maxTitleLen
+	for cut > 0 && !utf8.RuneStart(comm[cut]) {
+		cut-- // back off to a rune boundary; never split a multi-byte char
+	}
+	return strings.TrimSpace(comm[:cut])
 }
 
 // parseCPUTime parses ps's TIME output (e.g. "0:01.23" or "1:23:45") into
