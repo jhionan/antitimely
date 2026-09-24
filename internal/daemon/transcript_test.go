@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,7 +80,7 @@ func TestCollectTranscript_EmitsWithinGrace(t *testing.T) {
 	writeSession(t, root, "-work-daas", "sess1", body)
 	p, _ := newTranscriptPipeline(t, root, 600, []string{"/work/daas"})
 
-	sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now)
+	sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now)
 	if len(sigs) != 1 {
 		t.Fatalf("got %d signals, want 1", len(sigs))
 	}
@@ -95,7 +96,7 @@ func TestCollectTranscript_StaleBeyondGrace(t *testing.T) {
 	writeSession(t, root, "-work-daas", "sess1", body)
 	p, _ := newTranscriptPipeline(t, root, 600, []string{"/work/daas"})
 
-	if sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now); len(sigs) != 0 {
+	if sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now); len(sigs) != 0 {
 		t.Fatalf("got %d signals, want 0 (stale)", len(sigs))
 	}
 }
@@ -107,7 +108,7 @@ func TestCollectTranscript_CwdNotTracked(t *testing.T) {
 	writeSession(t, root, "-work-other", "sess1", body)
 	p, _ := newTranscriptPipeline(t, root, 600, []string{"/work/daas"})
 
-	if sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now); len(sigs) != 0 {
+	if sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now); len(sigs) != 0 {
 		t.Fatalf("got %d signals, want 0 (untracked cwd)", len(sigs))
 	}
 }
@@ -139,7 +140,7 @@ func TestCollectTranscript_SpaceBoundAdmitsWithoutCwdMatch(t *testing.T) {
 	})
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
 
-	sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now)
+	sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now)
 	if len(sigs) != 1 {
 		t.Fatalf("got %d signals, want 1 (space-bound must admit despite no cwd match)", len(sigs))
 	}

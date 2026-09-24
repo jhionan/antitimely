@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,7 +37,7 @@ func TestTranscriptSkipsReadingSessionsIdleBeyondGrace(t *testing.T) {
 	path := setMTime(t, root, "-work-daas", "stale", now-grace-60)
 
 	p, _ := newTranscriptPipeline(t, root, grace, []string{"/work/daas"})
-	if sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now); len(sigs) != 0 {
+	if sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now); len(sigs) != 0 {
 		t.Fatalf("stale session emitted %d signals, want 0", len(sigs))
 	}
 
@@ -69,7 +70,7 @@ func TestTranscriptReadsSessionsTouchedInsideGrace(t *testing.T) {
 	path := setMTime(t, root, "-work-daas", "fresh", now-30)
 
 	p, _ := newTranscriptPipeline(t, root, grace, []string{"/work/daas"})
-	sigs := p.collectTranscriptSignals(p.cache.Snapshot(), now)
+	sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now)
 	if len(sigs) != 1 {
 		t.Fatalf("fresh session emitted %d signals, want 1", len(sigs))
 	}

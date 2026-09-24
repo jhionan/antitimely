@@ -38,3 +38,17 @@ func TestDaemonPipelineUsesRealHerdrSessionPath(t *testing.T) {
 		t.Fatalf("NewPipeline's default resolver path = %q, want empty", def.herdr.Path())
 	}
 }
+
+// TestPipelineConfigDerivesClaudeSessionsDir pins the production wiring for
+// the unbound-session space fallback. PipelineConfig{} leaves it off, so
+// dropping this derivation would quietly send every headless review back to
+// cwd-only attribution with the transcript tests still green.
+func TestPipelineConfigDerivesClaudeSessionsDir(t *testing.T) {
+	got := pipelineConfigFor(Config{TranscriptRoot: "/u/.claude/projects"}).ClaudeSessionsDir
+	if got != "/u/.claude/sessions" {
+		t.Fatalf("ClaudeSessionsDir = %q, want the sessions registry beside the transcript root", got)
+	}
+	if got := pipelineConfigFor(Config{}).ClaudeSessionsDir; got != "" {
+		t.Fatalf("no transcript root: ClaudeSessionsDir = %q, want empty (fallback off)", got)
+	}
+}

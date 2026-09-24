@@ -100,6 +100,12 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 	if cfg.IntervalSeconds > 0 {
 		tickBudget = time.Duration(cfg.IntervalSeconds) * time.Second
 	}
+	// Claude Code keeps its per-process session registry beside the
+	// transcripts, in the same config dir.
+	claudeSessionsDir := ""
+	if cfg.TranscriptRoot != "" {
+		claudeSessionsDir = filepath.Join(filepath.Dir(cfg.TranscriptRoot), "sessions")
+	}
 	return PipelineConfig{
 		IdleThresholdSec:     cfg.IdleThresholdSec,
 		CPUDeltaThresh:       cfg.AgentCPUThresh,
@@ -110,6 +116,7 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 		TranscriptTracking:   cfg.TranscriptTracking,
 		TranscriptRoot:       cfg.TranscriptRoot,
 		TranscriptGraceSec:   cfg.TranscriptGraceSec,
+		ClaudeSessionsDir:    claudeSessionsDir,
 		TickBudget:           tickBudget,
 	}
 }

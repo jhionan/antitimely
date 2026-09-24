@@ -44,6 +44,10 @@ type PipelineConfig struct {
 	// seconds after its newest turn, stitching gaps between turns into one
 	// continuous billable block.
 	TranscriptGraceSec int
+	// ClaudeSessionsDir is Claude Code's per-process session registry
+	// (~/.claude/sessions/<pid>.json), used to find the process behind a
+	// transcript herdr doesn't know. Empty ⇒ that fallback is off.
+	ClaudeSessionsDir string
 	// TickBudget is how long one tick may take before it is reported as slow.
 	// Set it to the poll interval: past that the tracker is skipping billable
 	// seconds outright (a stall on 2026-08-24 recorded 2 ticks in 6 minutes
@@ -172,6 +176,14 @@ type Pipeline struct {
 	// transcriptState is per-session-file tail/offset + last-activity state,
 	// keyed by absolute .jsonl path.
 	transcriptState map[string]transcriptSession
+	// sessionPane caches Claude session uuid -> HERDR_PANE_ID ("" = the
+	// session's process is not under herdr) for sessions herdr's
+	// session.json doesn't name. Learned from the process while it runs and
+	// kept after it exits, because Claude Code deletes sessions/<pid>.json on
+	// exit while the transcript keeps billing for the grace window. Like
+	// procPane, only the pane is cached; pane -> space re-resolves per tick.
+	// Pruned with transcriptState when the transcript file goes away.
+	sessionPane map[string]string
 	// slowTickRetryAt is the earliest unix-second at which another slow-tick
 	// line may be logged; slowTickBackoffSec is the current quiet window,
 	// doubled per report and cleared by the first tick back inside budget.
@@ -214,6 +226,7 @@ func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineCon
 		procPane:         map[int]string{},
 		armedAgentStreak: map[int64]int{},
 		transcriptState:  map[string]transcriptSession{},
+		sessionPane:      map[string]string{},
 	}
 }
 
@@ -273,7 +286,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	signals = append(signals, p.collectAgentSignals(ctx, snap, userPresent)...)
 	ph.agent = time.Since(phaseStart)
 	phaseStart = time.Now()
-	signals = append(signals, p.collectTranscriptSignals(snap, now)...)
+	signals = append(signals, p.collectTranscriptSignals(ctx, snap, now)...)
 	ph.transcript = time.Since(phaseStart)
 
 	if len(signals) == 0 {
