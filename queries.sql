@@ -1,8 +1,12 @@
 -- name: UpsertObservation :one
+-- The no-op update exists only so RETURNING yields the existing id (DO NOTHING
+-- returns no row on conflict). It must not touch id: rewriting the primary key
+-- makes SQLite check that no tick still references the old id, a full scan of
+-- ticks per call (see TestUpsertObservationPlanDoesNotScanTicks).
 INSERT INTO observations (source, bundle_id, window_title, binary_name, cwd, space_id, first_seen)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (source, bundle_id, window_title, binary_name, cwd, space_id)
-DO UPDATE SET id = id
+DO UPDATE SET first_seen = first_seen
 RETURNING id;
 
 -- name: IsObservationIgnored :one
