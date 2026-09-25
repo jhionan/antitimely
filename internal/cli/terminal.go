@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	ansiAltEnter   = "\x1b[?1047h"
-	ansiAltLeave   = "\x1b[?1047l"
+	ansiAltEnter   = "\x1b[?1049h" // ?1049 saves the cursor; ?1047 did not, so the menu overprinted scrollback
+	ansiAltLeave   = "\x1b[?1049l" // restores the cursor saved on enter
 	ansiClearHome  = "\x1b[H\x1b[J"
 	ansiHideCursor = "\x1b[?25l"
 	ansiShowCursor = "\x1b[?25h"

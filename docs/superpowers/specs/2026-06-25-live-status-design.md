@@ -55,7 +55,7 @@ appear on the 5s grid). `Idle`/`Uptime` therefore advance in 5s steps.
 Library: `golang.org/x/sys/unix` (already an indirect dependency — no new
 go.sum module). macOS-only, consistent with the tool.
 
-- **Enter:** write alt-screen enter (`\033[?1047h`); `IoctlGetTermios` to stash
+- **Enter:** write alt-screen enter (`\033[?1049h`); `IoctlGetTermios` to stash
   original; clear `ICANON|ECHO`, **keep `ISIG`**; set `VMIN=0`, `VTIME=50`
   (5.0s read timeout); `IoctlSetTermios`.
 - **Loop:** `Read` one byte from stdin.
@@ -64,7 +64,7 @@ go.sum module). macOS-only, consistent with the tool.
   - Each redraw: cursor home + clear (`\033[H\033[J`), then `renderStatus`.
 - **Teardown (always — normal exit AND SIGINT handler):** restore original
   termios → flush pending input (`TCIFLUSH`, discards stray escape-sequence
-  tails such as an arrow key's `[ A`) → alt-screen leave (`\033[?1047l`) → show
+  tails such as an arrow key's `[ A`) → alt-screen leave (`\033[?1049l`) → show
   cursor.
 
 No key-reader goroutine: the timed `Read` is both the refresh clock and the key
