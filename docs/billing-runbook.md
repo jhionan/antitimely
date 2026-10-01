@@ -44,12 +44,12 @@ END=$(date -d "<this invoice anchor, e.g. 2026-07-01 18:11:17>" +%s)
 
 Check the outstanding credit before invoicing: `atl invoice balance BClouder`. A period whose hours are fully covered by the advance produces a correct invoice with **0.00 due** — that is not an error, and the Subtotal is still the figure to reconcile the timesheet against.
 
-BClouder project ids: **VCNA=5, Rumo=6, Daas=7** (verify: `SELECT id,name FROM projects p JOIN companies c ON c.id=p.company_id WHERE c.name='BClouder';`).
+BClouder project ids: **VCNA=5, Rumo=6, Daas=7, MD-Tracker=8, DED=9**. **Re-run this every month before trusting the `IN (...)` lists below**: `SELECT id,name FROM projects p JOIN companies c ON c.id=p.company_id WHERE c.name='BClouder';`. ES-0011 nearly shipped a 95 h timesheet against a 146.86 h invoice because the list still read `(5,6,7)` after MD-Tracker and DED were added. Step 3's deduped figure must equal the invoice Subtotal *exactly*, so a gap there means the list is stale.
 
 ## Step 3 — Reconcile the invoice (deduped) — sanity check
 
 ```bash
-sqlite3 -readonly "$DB" "SELECT printf('deduped: %.2f h -> CAD %.2f', COUNT(DISTINCT ts)*5.0/3600, COUNT(DISTINCT ts)*5.0/3600*50) FROM ticks WHERE project_id IN (5,6,7) AND ts>=$START AND ts<$END;"
+sqlite3 -readonly "$DB" "SELECT printf('deduped: %.2f h -> CAD %.2f', COUNT(DISTINCT ts)*5.0/3600, COUNT(DISTINCT ts)*5.0/3600*50) FROM ticks WHERE project_id IN (5,6,7,8,9) AND ts>=$START AND ts<$END;"
 ```
 This should match the invoice's **Subtotal** (rate is CAD 50.00/h; modulo banker's-rounding cents). Compare against the Subtotal, not the Amount Due: once an advance is being drawn down, `total_cents` and the printed total are *net* of the credit applied, so a correct invoice can show 0.00 due against many hours worked.
 
@@ -62,12 +62,12 @@ Per-day = **sum of each project's distinct-second count** (NOT deduped):
 sqlite3 -readonly "$DB" "
 SELECT day, printf('%.2f', SUM(cnt)*5.0/3600) FROM (
   SELECT date(ts,'unixepoch','localtime') day, project_id, COUNT(DISTINCT ts) cnt
-  FROM ticks WHERE project_id IN (5,6,7) AND ts>=$START AND ts<$END
+  FROM ticks WHERE project_id IN (5,6,7,8,9) AND ts>=$START AND ts<$END
   GROUP BY day, project_id
 ) GROUP BY day HAVING SUM(cnt)>6 ORDER BY day;"     -- HAVING drops negligible <30s blips
 
 # Grand total (this is the timesheet total, >= invoice):
-sqlite3 -readonly "$DB" "SELECT printf('%.2f h', SUM(cnt)*5.0/3600) FROM (SELECT COUNT(DISTINCT ts) cnt FROM ticks WHERE project_id IN (5,6,7) AND ts>=$START AND ts<$END GROUP BY project_id);"
+sqlite3 -readonly "$DB" "SELECT printf('%.2f h', SUM(cnt)*5.0/3600) FROM (SELECT COUNT(DISTINCT ts) cnt FROM ticks WHERE project_id IN (5,6,7,8,9) AND ts>=$START AND ts<$END GROUP BY project_id);"
 ```
 
 ## Step 5 — Gather + verify descriptions from TWO sources (Claude-driven, not automatable yet)
