@@ -26,6 +26,9 @@ type FileConfig struct {
 	TranscriptTracking    *bool  `yaml:"transcript_tracking,omitempty"`
 	TranscriptGrace       string `yaml:"transcript_grace,omitempty"`
 	TranscriptRoot        string `yaml:"transcript_root,omitempty"`
+	// OpencodeDB overrides opencode's database path; "off" disables the
+	// opencode transcript source.
+	OpencodeDB string `yaml:"opencode_db,omitempty"`
 }
 
 // DefaultConfigFilePath returns ~/.antitimely/config.yaml.
@@ -131,6 +134,17 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 		}
 		cfg.TranscriptRoot = p
 	}
+	switch fc.OpencodeDB {
+	case "":
+	case "off":
+		cfg.OpencodeDB = ""
+	default:
+		p, err := expandHome(fc.OpencodeDB)
+		if err != nil {
+			return fmt.Errorf("opencode_db: %w", err)
+		}
+		cfg.OpencodeDB = p
+	}
 	return nil
 }
 
@@ -205,5 +219,6 @@ agent_busy_fall_ticks: 3
 # transcript_tracking: true
 # transcript_grace: 10m          # a session counts this long after its last turn
 # transcript_root: ~/.claude/projects
+# opencode_db: ~/.local/share/opencode/opencode.db   # "off" disables opencode session tracking
 `
 }

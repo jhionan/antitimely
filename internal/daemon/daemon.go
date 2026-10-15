@@ -38,6 +38,9 @@ type Config struct {
 	TranscriptTracking bool
 	TranscriptGraceSec int
 	TranscriptRoot     string
+	// OpencodeDB is opencode's SQLite store, read as a transcript source.
+	// Empty disables it.
+	OpencodeDB string
 }
 
 func DefaultConfig() (Config, error) {
@@ -59,6 +62,7 @@ func DefaultConfig() (Config, error) {
 		TranscriptTracking: true,
 		TranscriptGraceSec: 600,
 		TranscriptRoot:     defaultTranscriptRoot(),
+		OpencodeDB:         defaultOpencodeDB(),
 	}, nil
 }
 
@@ -117,6 +121,7 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 		TranscriptRoot:       cfg.TranscriptRoot,
 		TranscriptGraceSec:   cfg.TranscriptGraceSec,
 		ClaudeSessionsDir:    claudeSessionsDir,
+		OpencodeDB:           cfg.OpencodeDB,
 		TickBudget:           tickBudget,
 	}
 }

@@ -48,6 +48,10 @@ type PipelineConfig struct {
 	// (~/.claude/sessions/<pid>.json), used to find the process behind a
 	// transcript herdr doesn't know. Empty ⇒ that fallback is off.
 	ClaudeSessionsDir string
+	// OpencodeDB is opencode's SQLite store (~/.local/share/opencode/opencode.db).
+	// Empty (or TranscriptTracking off) ⇒ opencode sessions are seen only
+	// through the CPU-based agent signal.
+	OpencodeDB string
 	// TickBudget is how long one tick may take before it is reported as slow.
 	// Set it to the poll interval: past that the tracker is skipping billable
 	// seconds outright (a stall on 2026-08-24 recorded 2 ticks in 6 minutes
@@ -137,11 +141,15 @@ type transcriptSession struct {
 }
 
 type Pipeline struct {
-	q       *store.Queries
-	bridge  macos.Bridge
-	cache   *Cache
-	cfg     PipelineConfig
-	prevCPU map[int]uint64
+	// opencodeDB is the lazily opened read-only handle on cfg.OpencodeDB;
+	// opencodeRetryAt (unix s) holds off re-reading it after a failure.
+	opencodeDB      *sql.DB
+	opencodeRetryAt int64
+	q               *store.Queries
+	bridge          macos.Bridge
+	cache           *Cache
+	cfg             PipelineConfig
+	prevCPU         map[int]uint64
 	// procClass caches each PID's classification (track-or-ignore) so we
 	// don't re-lsof and re-evaluate rules every tick. Invalidated when the
 	// cache snapshot pointer changes (rule/watch mutation) or when PID
@@ -318,6 +326,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	ph.agent = time.Since(phaseStart)
 	phaseStart = time.Now()
 	signals = append(signals, p.collectTranscriptSignals(ctx, snap, now)...)
+	signals = append(signals, p.collectOpencodeSignals(ctx, snap, now)...)
 	ph.transcript = time.Since(phaseStart)
 
 	if len(signals) == 0 {
