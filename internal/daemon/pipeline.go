@@ -52,6 +52,10 @@ type PipelineConfig struct {
 	// Empty (or TranscriptTracking off) ⇒ opencode sessions are seen only
 	// through the CPU-based agent signal.
 	OpencodeDB string
+	// CodexRoot is Codex's rollout directory (~/.codex/sessions). Empty (or
+	// TranscriptTracking off) ⇒ Codex sessions are seen only through the
+	// CPU-based agent signal.
+	CodexRoot string
 	// TickBudget is how long one tick may take before it is reported as slow.
 	// Set it to the poll interval: past that the tracker is skipping billable
 	// seconds outright (a stall on 2026-08-24 recorded 2 ticks in 6 minutes
@@ -138,6 +142,7 @@ type transcriptSession struct {
 	offset       int64  // bytes consumed so far
 	lastActivity int64  // unix seconds of newest entry seen
 	cwd          string // authoritative cwd from the transcript body
+	cmdCwd       string // Codex: cwd of the newest command, preferred over cwd
 }
 
 type Pipeline struct {
@@ -145,11 +150,14 @@ type Pipeline struct {
 	// opencodeRetryAt (unix s) holds off re-reading it after a failure.
 	opencodeDB      *sql.DB
 	opencodeRetryAt int64
-	q               *store.Queries
-	bridge          macos.Bridge
-	cache           *Cache
-	cfg             PipelineConfig
-	prevCPU         map[int]uint64
+	// codexState is per-rollout-file bookkeeping, kept apart from
+	// transcriptState because the Claude collector prunes what it did not see.
+	codexState map[string]transcriptSession
+	q          *store.Queries
+	bridge     macos.Bridge
+	cache      *Cache
+	cfg        PipelineConfig
+	prevCPU    map[int]uint64
 	// procClass caches each PID's classification (track-or-ignore) so we
 	// don't re-lsof and re-evaluate rules every tick. Invalidated when the
 	// cache snapshot pointer changes (rule/watch mutation) or when PID
@@ -327,6 +335,7 @@ func (p *Pipeline) RunTick(ctx context.Context, now int64) error {
 	phaseStart = time.Now()
 	signals = append(signals, p.collectTranscriptSignals(ctx, snap, now)...)
 	signals = append(signals, p.collectOpencodeSignals(ctx, snap, now)...)
+	signals = append(signals, p.collectCodexSignals(ctx, snap, now)...)
 	ph.transcript = time.Since(phaseStart)
 
 	if len(signals) == 0 {

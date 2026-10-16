@@ -41,6 +41,9 @@ type Config struct {
 	// OpencodeDB is opencode's SQLite store, read as a transcript source.
 	// Empty disables it.
 	OpencodeDB string
+	// CodexRoot is Codex's rollout directory, read as a transcript source.
+	// Empty disables it.
+	CodexRoot string
 }
 
 func DefaultConfig() (Config, error) {
@@ -63,6 +66,7 @@ func DefaultConfig() (Config, error) {
 		TranscriptGraceSec: 600,
 		TranscriptRoot:     defaultTranscriptRoot(),
 		OpencodeDB:         defaultOpencodeDB(),
+		CodexRoot:          defaultCodexRoot(),
 	}, nil
 }
 
@@ -122,6 +126,7 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 		TranscriptGraceSec:   cfg.TranscriptGraceSec,
 		ClaudeSessionsDir:    claudeSessionsDir,
 		OpencodeDB:           cfg.OpencodeDB,
+		CodexRoot:            cfg.CodexRoot,
 		TickBudget:           tickBudget,
 	}
 }
