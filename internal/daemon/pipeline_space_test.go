@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/rian/antitimely/internal/herdr"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 )
 
 // snapWithCwdPattern returns a CacheSnapshot tracking cwd via a plain cwd
@@ -44,7 +44,7 @@ func TestAgentSignalCarriesHerdrSpace(t *testing.T) {
 	const cwd = "/repo/daas-back-end"
 	p, br, _, db := newTestPipeline(t)
 	defer db.Close()
-	br.Processes = []macos.ProcessSample{{PID: 100, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 100, Name: "claude", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{100: cwd}
 	br.EnvByPID = map[int]map[string]string{100: {"HERDR_PANE_ID": "wN:p1"}}
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
@@ -66,7 +66,7 @@ func TestAgentSignalWithoutHerdrHasEmptySpace(t *testing.T) {
 	const cwd = "/repo/daas-back-end"
 	p, br, _, db := newTestPipeline(t)
 	defer db.Close()
-	br.Processes = []macos.ProcessSample{{PID: 101, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 101, Name: "claude", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{101: cwd}
 	// no EnvByPID entry: process is not running under herdr
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
@@ -90,7 +90,7 @@ func TestAgentSignalSpaceBoundTracksWithoutCwdMatch(t *testing.T) {
 	const cwd = "/repo/daas-back-end" // does not match snapWithBoundSpace's CwdPatterns
 	p, br, _, db := newTestPipeline(t)
 	defer db.Close()
-	br.Processes = []macos.ProcessSample{{PID: 102, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 102, Name: "claude", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{102: cwd}
 	br.EnvByPID = map[int]map[string]string{102: {"HERDR_PANE_ID": "wN:p1"}}
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
@@ -120,7 +120,7 @@ func TestAgentSignalSpaceInvalidatedOnPIDReuse(t *testing.T) {
 	br.CWDByPID = map[int]string{200: cwd}
 
 	// Original process: claude in space wN.
-	br.Processes = []macos.ProcessSample{{PID: 200, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 200, Name: "claude", CPUTicks: 0}}
 	br.EnvByPID = map[int]map[string]string{200: {"HERDR_PANE_ID": "wN:p1"}}
 	p.collectAgentSignals(context.Background(), snapWithCwdPattern(cwd), true)
 	br.Processes[0].CPUTicks = 10_000
@@ -169,7 +169,7 @@ func TestAgentSpaceResolutionRecoversAfterSessionFileAppears(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	p.herdr = herdr.NewResolver(path)
 
-	br.Processes = []macos.ProcessSample{{PID: 300, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 300, Name: "claude", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{300: cwd}
 	br.EnvByPID = map[int]map[string]string{300: {"HERDR_PANE_ID": "wN:p1"}}
 	snap := snapWithCwdPattern(cwd)
@@ -203,7 +203,7 @@ func TestAgentEnvProbedOncePerPID(t *testing.T) {
 	p, br, _, db := newTestPipeline(t)
 	defer db.Close()
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
-	br.Processes = []macos.ProcessSample{{PID: 301, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 301, Name: "claude", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{301: cwd}
 	// no EnvByPID entry: the probe succeeds and finds nothing.
 	snap := snapWithCwdPattern(cwd)
@@ -232,7 +232,7 @@ func TestAgentSpaceBoundSurvivesTransientEnvProbeFailure(t *testing.T) {
 	p, br, _, db := newTestPipeline(t)
 	defer db.Close()
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
-	br.Processes = []macos.ProcessSample{{PID: 302, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 302, Name: "claude", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{302: cwd}
 	br.EnvByPID = map[int]map[string]string{302: {"HERDR_PANE_ID": "wN:p1"}}
 	snap := snapWithBoundSpace("wN")

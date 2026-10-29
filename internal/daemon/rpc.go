@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/rian/antitimely/internal/domain"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
 )
@@ -20,7 +20,7 @@ type AntitimelyService struct {
 	DB                  *sql.DB
 	Q                   *store.Queries
 	Cache               *Cache
-	Bridge              macos.Bridge
+	Bridge              osbridge.Bridge
 	TickIntervalSeconds int
 	Perm                *PermissionTracker
 	StartedAtUnix       int64 // set when the daemon boots; used to report uptime

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 )
 
 // A slow write phase has two causes that call for opposite fixes: the single
@@ -27,7 +27,7 @@ func TestSlowTickReportSeparatesConnectionWait(t *testing.T) {
 		AllowedBundles: map[string]bool{"com.google.antigravity": true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.google.antigravity", PID: 1234}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.google.antigravity", PID: 1234}
 	br.FocusedTitle = "foca-api — main — Antigravity"
 
 	ctx := context.Background()

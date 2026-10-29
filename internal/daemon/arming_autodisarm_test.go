@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/rian/antitimely/internal/domain"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/store"
 )
 
@@ -66,7 +66,7 @@ func TestPipeline_ArmedProject_AutoDisarmsAfterSustainedAgentActivity(t *testing
 		ts  int64
 		cpu uint64
 	}{{1000, 100}, {1005, 200}, {1010, 300}, {1015, 400}} {
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: s.cpu}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: s.cpu}}
 		if err := p.RunTick(ctx, s.ts); err != nil {
 			t.Fatalf("RunTick @%d: %v", s.ts, err)
 		}
@@ -116,7 +116,7 @@ func TestPipeline_ArmedProject_NoAutoDisarmWhenIdle_ButTracksSuppressed(t *testi
 		ts  int64
 		cpu uint64
 	}{{1000, 100}, {1005, 200}, {1010, 300}, {1015, 400}} {
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: s.cpu}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: s.cpu}}
 		if err := p.RunTick(ctx, s.ts); err != nil {
 			t.Fatalf("RunTick @%d: %v", s.ts, err)
 		}

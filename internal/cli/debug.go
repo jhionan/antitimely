@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 )
 
 func cmdDebug(args []string) int {
@@ -16,7 +16,7 @@ func cmdDebug(args []string) int {
 	ctx := context.Background()
 	switch args[0] {
 	case "windows":
-		out, err := macos.FocusedWindowDebugReal(ctx)
+		out, err := osbridge.FocusedWindowDebugReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -24,7 +24,7 @@ func cmdDebug(args []string) int {
 		fmt.Print(out)
 		return 0
 	case "frontmost":
-		fi, err := macos.FrontmostReal(ctx)
+		fi, err := osbridge.FrontmostReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -32,7 +32,7 @@ func cmdDebug(args []string) int {
 		fmt.Printf("bundle=%q name=%q pid=%d\n", fi.BundleID, fi.Name, fi.PID)
 		return 0
 	case "idle":
-		s, err := macos.IdleSecondsReal(ctx)
+		s, err := osbridge.IdleSecondsReal(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

@@ -1,4 +1,4 @@
-package macos
+package osbridge
 
 import (
 	"bufio"

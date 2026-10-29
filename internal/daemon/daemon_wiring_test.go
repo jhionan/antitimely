@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/rian/antitimely/internal/herdr"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 )
 
 // TestDaemonPipelineUsesRealHerdrSessionPath pins the single line that makes
@@ -16,7 +16,7 @@ import (
 // space attribution entirely with every other test still green, and every
 // space-bound project would silently start billing by cwd instead.
 func TestDaemonPipelineUsesRealHerdrSessionPath(t *testing.T) {
-	p := newDaemonPipeline(nil, &macos.FakeBridge{}, NewCache(), PipelineConfig{})
+	p := newDaemonPipeline(nil, &osbridge.FakeBridge{}, NewCache(), PipelineConfig{})
 	if p.herdr == nil {
 		t.Fatal("the daemon's pipeline has no herdr resolver: space attribution is off")
 	}
@@ -34,7 +34,7 @@ func TestDaemonPipelineUsesRealHerdrSessionPath(t *testing.T) {
 
 	// And the inert default really is inert, which is what makes the check
 	// above meaningful rather than tautological.
-	if def := NewPipeline(nil, &macos.FakeBridge{}, NewCache(), PipelineConfig{}); def.herdr.Path() != "" {
+	if def := NewPipeline(nil, &osbridge.FakeBridge{}, NewCache(), PipelineConfig{}); def.herdr.Path() != "" {
 		t.Fatalf("NewPipeline's default resolver path = %q, want empty", def.herdr.Path())
 	}
 }

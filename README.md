@@ -35,7 +35,7 @@ See `docs/superpowers/specs/2026-05-20-antitimely-design.md` for the full design
 | CLI | stdlib **`flag`**, hand-rolled dispatch + interactive menu; `golang.org/x/sys/unix` for raw terminal mode | No framework; the command surface is small |
 | Config | YAML via [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) | `~/.antitimely/config.yaml`, all keys optional |
 | PDF | [`maroto/v2`](https://github.com/johnfercher/maroto) to render invoices, [`ledongthuc/pdf`](https://github.com/ledongthuc/pdf) to read them back in tests | |
-| OS integration | shells out to stock macOS tools: `osascript` (System Events), `ps`, `lsof`, `ioreg` | All behind `internal/macos`, with a fake bridge for tests |
+| OS integration | shells out to stock macOS tools: `osascript` (System Events), `ps`, `lsof`, `ioreg` | All behind `internal/osbridge`, with a fake bridge for tests |
 | Process supervision | **launchd** user agent (`com.rian.antitimely`), driven by `launchctl` | Starts at login, restarts on crash |
 | Signing | `make build` re-signs with a stable Developer ID via `codesign` | macOS keeps the Accessibility grant across rebuilds |
 
@@ -87,7 +87,7 @@ atl invoice generate BClouder
 
 ## How it works
 
-A background daemon polls every 5 seconds, stores everything in a single SQLite file (`~/.antitimely/db.sqlite`), and answers the CLI over a Unix socket. All OS introspection is isolated in one package (`internal/macos`) and done by shelling out to standard macOS tools — no CGO.
+A background daemon polls every 5 seconds, stores everything in a single SQLite file (`~/.antitimely/db.sqlite`), and answers the CLI over a Unix socket. All OS introspection is isolated in one package (`internal/osbridge`) and, on macOS, done by shelling out to standard tools — no CGO.
 
 ### Each poll: three independent signals
 
@@ -329,7 +329,8 @@ Or `./scripts/rebuild.sh` for the same rebuild+restart flow without `make`.
 internal/
 ├── domain/      pure Go: types, rule matching, rule generalization (zero deps)
 ├── store/       sqlc-generated SQLite bindings (regenerate with `make sqlc`)
-├── macos/       the only place subprocesses live (osascript/ps/lsof/ioreg)
+├── osbridge/    the only place OS calls live: the Bridge interface + fake (shared),
+│                macOS implementation in *_darwin.go (osascript/ps/lsof/ioreg)
 ├── daemon/      pipeline, polling, cache, RPC handlers, WAL checkpointer, lifecycle
 ├── invoice/     invoice numbering, line items, advance-credit drawdown, PDF rendering
 ├── herdr/       resolves herdr panes and Claude sessions to workspaces (fails closed)
@@ -358,7 +359,7 @@ Coverage: domain logic (matching + generalization), SQLite schema + queries, RPC
 Contributions are welcome. The codebase is small, pure-Go (no CGO), and layered for easy navigation (see [Layered architecture](#layered-architecture)).
 
 1. `make test` should stay green — domain logic, store queries, and RPC round-trips are all covered.
-2. Keep system calls behind the `internal/macos` bridge so the rest of the code stays testable with the fake bridge.
+2. Keep system calls behind the `internal/osbridge` bridge so the rest of the code stays testable with the fake bridge.
 3. SQL changes go in `schema.sql` / `queries.sql`, then `make sqlc` to regenerate `internal/store`.
 
 Open an issue to discuss larger changes before sending a PR.

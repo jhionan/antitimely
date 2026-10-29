@@ -1,25 +1,13 @@
-package macos
+package osbridge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"syscall"
 	"time"
 )
-
-// ErrAccessibilityDenied is returned when osascript fails due to System Events
-// permission being denied. Callers should warn the user once and continue
-// degraded.
-var ErrAccessibilityDenied = errors.New("macos: accessibility/automation permission denied")
-
-// ErrOsascriptTimeout reports that an osascript call outlived its deadline and
-// had to be killed. Callers must treat this differently from an ordinary
-// failure: a hung osascript is usually a wedged System Events, and respawning
-// one every tick is how the daemon accumulated multi-GB orphans in production.
-var ErrOsascriptTimeout = errors.New("macos: osascript timed out")
 
 // Tab is used as the inter-field delimiter in AppleScript return values because
 // bundle IDs and app names can legitimately contain "|", but never a tab.

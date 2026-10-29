@@ -20,7 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/rian/antitimely/internal/herdr"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
 )
@@ -138,7 +138,7 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 // resolves nothing, so tests need no herdr state), which means dropping this
 // wiring would silently disable space attribution with every test still
 // green. TestDaemonPipelineUsesRealHerdrSessionPath is that assertion.
-func newDaemonPipeline(q *store.Queries, bridge macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
+func newDaemonPipeline(q *store.Queries, bridge osbridge.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	p := NewPipeline(q, bridge, cache, cfg)
 	p.herdr = herdr.NewResolver(herdr.DefaultSessionPath())
 	return p
@@ -195,7 +195,7 @@ func Run(cfg Config, schemaSQL string) error {
 		return fmt.Errorf("migrate rules match_space_id: %w", err)
 	}
 
-	bridge := &macos.RealBridge{}
+	bridge := &osbridge.RealBridge{}
 	cache := NewCache()
 	pt := NewPermissionTracker()
 	svc := &AntitimelyService{

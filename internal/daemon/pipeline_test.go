@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/rian/antitimely/internal/domain"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/store"
 )
 
@@ -23,7 +23,7 @@ func loadSchema(t *testing.T) string {
 	return string(b)
 }
 
-func newTestPipelineWithCfg(t *testing.T, cfg PipelineConfig) (*Pipeline, *macos.FakeBridge, *Cache, *sql.DB) {
+func newTestPipelineWithCfg(t *testing.T, cfg PipelineConfig) (*Pipeline, *osbridge.FakeBridge, *Cache, *sql.DB) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(1)")
 	if err != nil {
@@ -33,13 +33,13 @@ func newTestPipelineWithCfg(t *testing.T, cfg PipelineConfig) (*Pipeline, *macos
 		t.Fatalf("schema: %v", err)
 	}
 	q := store.New(db)
-	br := &macos.FakeBridge{CWDByPID: map[int]string{}}
+	br := &osbridge.FakeBridge{CWDByPID: map[int]string{}}
 	cache := NewCache()
 	p := NewPipeline(q, br, cache, cfg)
 	return p, br, cache, db
 }
 
-func newTestPipeline(t *testing.T) (*Pipeline, *macos.FakeBridge, *Cache, *sql.DB) {
+func newTestPipeline(t *testing.T) (*Pipeline, *osbridge.FakeBridge, *Cache, *sql.DB) {
 	t.Helper()
 	return newTestPipelineWithCfg(t, PipelineConfig{
 		IdleThresholdSec:   120,
@@ -79,7 +79,7 @@ func TestPipeline_FocusSignal_WritesUnassignedTick(t *testing.T) {
 		AllowedBundles: map[string]bool{"com.google.antigravity": true},
 	})
 	br.IdleSecondsVal = 5 // user present
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.google.antigravity", PID: 1234}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.google.antigravity", PID: 1234}
 	br.FocusedTitle = "foca-api — main — Antigravity"
 
 	if err := p.RunTick(ctx, 1000); err != nil {
@@ -104,7 +104,7 @@ func TestPipeline_AgentSignal_CountsOnlyWhenActive(t *testing.T) {
 		AllowedBinaries: map[string]bool{"claude": true},
 	})
 	br.IdleSecondsVal = 200 // user idle — focus signal won't fire
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/Users/rian/work/foca-api/src"}
 
 	// First tick: no prevCPU, should not emit.
@@ -118,7 +118,7 @@ func TestPipeline_AgentSignal_CountsOnlyWhenActive(t *testing.T) {
 	}
 
 	// Second tick: CPU delta = 50 (above threshold of 5) → emit.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 150}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 150}}
 	if err := p.RunTick(ctx, 1005); err != nil {
 		t.Fatalf("RunTick #2: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestPipeline_AgentSignal_CountsOnlyWhenActive(t *testing.T) {
 	}
 
 	// Third tick: CPU delta = 0 → no emit.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 150}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 150}}
 	if err := p.RunTick(ctx, 1010); err != nil {
 		t.Fatalf("RunTick #3: %v", err)
 	}
@@ -153,10 +153,10 @@ func TestPipeline_AgentSignal_IdleThresholdHigherWhenUserIdle(t *testing.T) {
 
 	// --- Scenario: user is idle, claude burns just 10 centi (below idle threshold) ---
 	br.IdleSecondsVal = 200 // idle
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1000}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1000}}
 	br.CWDByPID = map[int]string{999: "/work/x"}
 	_ = p.RunTick(ctx, 1000) // establish prev
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1010}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1010}}
 	_ = p.RunTick(ctx, 1005) // delta 10 < idle threshold 100, no emit
 
 	var n int
@@ -166,7 +166,7 @@ func TestPipeline_AgentSignal_IdleThresholdHigherWhenUserIdle(t *testing.T) {
 	}
 
 	// --- Scenario: user is idle, claude burns 200 centi (above idle threshold) ---
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1210}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1210}}
 	_ = p.RunTick(ctx, 1010) // delta 200 >= idle threshold 100, emit
 
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
@@ -176,7 +176,7 @@ func TestPipeline_AgentSignal_IdleThresholdHigherWhenUserIdle(t *testing.T) {
 
 	// --- Scenario: user becomes active, claude back to low CPU ---
 	br.IdleSecondsVal = 5 // active
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1220}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 1220}}
 	_ = p.RunTick(ctx, 1015) // delta 10 >= active threshold 5, emit
 
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
@@ -205,11 +205,11 @@ func TestPipeline_AgentSignal_TaggedByRule(t *testing.T) {
 		},
 	})
 	br.IdleSecondsVal = 200
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/Users/rian/work/foca-api/src"}
 	_ = p.RunTick(ctx, 1000)
 
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 
 	rows, _ := q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: 0, Ts_2: 9999})
@@ -237,7 +237,7 @@ func TestPipeline_IdleError_FailsOpen(t *testing.T) {
 	cache.Store(&CacheSnapshot{
 		AllowedBundles: map[string]bool{"com.example.app": true},
 	})
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.example.app", PID: 1}
 	br.FocusedTitle = "some window"
 	br.IdleErr = errors.New("boom")
 
@@ -292,7 +292,7 @@ func TestPipeline_AgentSignal_StalePIDsPrunedOnPSFailure(t *testing.T) {
 		AllowedBinaries: map[string]bool{"claude": true},
 	})
 	br.IdleSecondsVal = 5 // user present
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/work/x"}
 
 	// Establish prevCPU entry via a successful tick.
@@ -340,11 +340,11 @@ func TestPipeline_AgentSignal_CwdRuleWidensBinaryAllowlist(t *testing.T) {
 		CwdPatterns: []string{"/Users/rian/focaApp/dentix"},
 	})
 	br.IdleSecondsVal = 5
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "go", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "go", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/Users/rian/focaApp/dentix/dentix-flutter-app"}
 	_ = p.RunTick(ctx, 1000) // establish prevCPU
 
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "go", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "go", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 
 	rows, _ := q.TotalsByProject(ctx, store.TotalsByProjectParams{Ts: 0, Ts_2: 9999})
@@ -368,11 +368,11 @@ func TestPipeline_AgentSignal_NonAllowlistedOutsideTrackedDir_Skipped(t *testing
 		CwdPatterns:     []string{"/Users/rian/work"},
 	})
 	br.IdleSecondsVal = 5
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/tmp"}
 	_ = p.RunTick(ctx, 1000)
 
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 5000}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "ffmpeg", CPUTicks: 5000}}
 	_ = p.RunTick(ctx, 1005)
 
 	var n int
@@ -395,11 +395,11 @@ func TestPipeline_AgentSignal_IgnoredPID_DoesNotRelsof(t *testing.T) {
 		CwdPatterns:     []string{"/work/tracked"},
 	})
 	br.IdleSecondsVal = 5
-	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{42: "/tmp"}
 	_ = p.RunTick(ctx, 1000)
 	// Threshold crossing on tick 2 → classify as ignored.
-	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 
 	cls, ok := p.procClass[42]
@@ -413,7 +413,7 @@ func TestPipeline_AgentSignal_IgnoredPID_DoesNotRelsof(t *testing.T) {
 	// Now make cwd lookup fail loudly. If the pipeline tries lsof again,
 	// the test will detect a tick was attempted past the cache layer.
 	br.CWDErr = errors.New("lsof must not be called for cached-ignored PID")
-	br.Processes = []macos.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 300}}
+	br.Processes = []osbridge.ProcessSample{{PID: 42, Name: "ffmpeg", CPUTicks: 300}}
 	if err := p.RunTick(ctx, 1010); err != nil {
 		t.Fatalf("RunTick: %v", err)
 	}
@@ -448,10 +448,10 @@ func TestPipeline_AgentSignal_PIDReuse_BinaryNameChange_Reclassifies(t *testing.
 	br.IdleSecondsVal = 5
 
 	// Phase 1: PID 100 = ffmpeg in /tmp → classified as ignored.
-	br.Processes = []macos.ProcessSample{{PID: 100, Name: "ffmpeg", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 100, Name: "ffmpeg", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{100: "/tmp"}
 	_ = p.RunTick(ctx, 1000)
-	br.Processes = []macos.ProcessSample{{PID: 100, Name: "ffmpeg", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 100, Name: "ffmpeg", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 	if cls := p.procClass[100]; cls.track {
 		t.Fatalf("phase 1: expected ffmpeg/PID 100 to be classified !track, got %+v", cls)
@@ -460,10 +460,10 @@ func TestPipeline_AgentSignal_PIDReuse_BinaryNameChange_Reclassifies(t *testing.
 	// Phase 2: PID 100 reused — same pid, different binary, fresh CPU counter
 	// (lower than what ffmpeg had). The CPU regression is what bumps prev down;
 	// the name change is what invalidates the cache entry.
-	br.Processes = []macos.ProcessSample{{PID: 100, Name: "go", CPUTicks: 10}}
+	br.Processes = []osbridge.ProcessSample{{PID: 100, Name: "go", CPUTicks: 10}}
 	br.CWDByPID = map[int]string{100: "/work/dentix/dentix-flutter-app"}
 	_ = p.RunTick(ctx, 1010) // CPU regressed: invalidate, skip emit.
-	br.Processes = []macos.ProcessSample{{PID: 100, Name: "go", CPUTicks: 110}}
+	br.Processes = []osbridge.ProcessSample{{PID: 100, Name: "go", CPUTicks: 110}}
 	_ = p.RunTick(ctx, 1015) // delta=100 ≥ threshold: classify fresh as tracked.
 
 	cls, ok := p.procClass[100]
@@ -497,10 +497,10 @@ func TestPipeline_AgentSignal_PIDReuse_CPURegression_Reclassifies(t *testing.T) 
 	br.IdleSecondsVal = 5
 
 	// Phase 1: PID 50 = zsh in /tmp → ignored, CPU rises to 500.
-	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 400}}
+	br.Processes = []osbridge.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 400}}
 	br.CWDByPID = map[int]string{50: "/tmp"}
 	_ = p.RunTick(ctx, 1000)
-	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 500}}
+	br.Processes = []osbridge.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 500}}
 	_ = p.RunTick(ctx, 1005)
 	if _, ok := p.procClass[50]; !ok {
 		t.Fatal("phase 1: expected zsh to be classified")
@@ -508,7 +508,7 @@ func TestPipeline_AgentSignal_PIDReuse_CPURegression_Reclassifies(t *testing.T) 
 
 	// Phase 2: PID 50 reused as a new zsh inside the tracked dir. CPU starts
 	// fresh at 0; the regression triggers cache invalidation.
-	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 0}}
 	br.CWDByPID = map[int]string{50: "/work/tracked/repo"}
 	_ = p.RunTick(ctx, 1010)
 	if _, ok := p.procClass[50]; ok {
@@ -516,7 +516,7 @@ func TestPipeline_AgentSignal_PIDReuse_CPURegression_Reclassifies(t *testing.T) 
 	}
 
 	// Phase 3: new zsh accumulates CPU; reclassifies as tracked via cwd rule.
-	br.Processes = []macos.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 50, Name: "zsh", CPUTicks: 100}}
 	_ = p.RunTick(ctx, 1015)
 	cls, ok := p.procClass[50]
 	if !ok {
@@ -542,10 +542,10 @@ func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
 		CwdPatterns:     nil,
 	})
 	br.IdleSecondsVal = 5
-	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{7: "/work/dentix/x"}
 	_ = p.RunTick(ctx, 1000)
-	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 	if cls := p.procClass[7]; cls.track {
 		t.Fatalf("pre-swap: expected ignored; got %+v", cls)
@@ -557,7 +557,7 @@ func TestPipeline_CacheSnapshotSwap_InvalidatesClassifications(t *testing.T) {
 		AllowedBinaries: map[string]bool{},
 		CwdPatterns:     []string{"/work/dentix"},
 	})
-	br.Processes = []macos.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 300}}
+	br.Processes = []osbridge.ProcessSample{{PID: 7, Name: "ffmpeg", CPUTicks: 300}}
 	_ = p.RunTick(ctx, 1010)
 
 	cls, ok := p.procClass[7]
@@ -599,11 +599,11 @@ func TestPipeline_PausedProject_AgentSignal_AutoResumes(t *testing.T) {
 		ArmedProjects:    map[int64]bool{},
 	})
 	br.IdleSecondsVal = 5 // user present — required for auto-resume
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/work/paused-proj/x"}
 	_ = p.RunTick(ctx, 1000) // establish prevCPU
 
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 
 	// Auto-resume arms the project and drops the tick — 0 ticks on resume tick.
@@ -661,11 +661,11 @@ func TestPipeline_PausedProject_AgentSignal_UserIdle_StaysPaused(t *testing.T) {
 		ArmedProjects:    map[int64]bool{},
 	})
 	br.IdleSecondsVal = 200 // user idle — the whole point: background CPU must not resurrect a paused project
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: "/work/paused-proj/x"}
 	_ = p.RunTick(ctx, 1000) // establish prevCPU
 
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 200}}
 	_ = p.RunTick(ctx, 1005)
 
 	// No ticks counted — the project is paused and the user is away.
@@ -706,7 +706,7 @@ func TestPipeline_FocusSignal_DisarmsProject(t *testing.T) {
 		ArmedProjects:    map[int64]bool{projID: true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1234}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: bundle, PID: 1234}
 	br.FocusedTitle = "armed-proj — main"
 
 	if err := p.RunTick(ctx, 1000); err != nil {
@@ -750,7 +750,7 @@ func TestPipeline_PausedProject_FocusSignal_StillSkipped(t *testing.T) {
 		PausedProjectIDs: map[int64]bool{projID: true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: bundle, PID: 1}
 	br.FocusedTitle = "paused-proj — main"
 	_ = p.RunTick(ctx, 1000)
 
@@ -796,7 +796,7 @@ func TestPipeline_FocusSignal_DoesNotDisarmOtherProjects(t *testing.T) {
 		ArmedProjects:    map[int64]bool{idA: true, idB: true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1234}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: bundle, PID: 1234}
 	br.FocusedTitle = "alpha — main"
 
 	if err := p.RunTick(ctx, 1000); err != nil {
@@ -833,7 +833,7 @@ func TestPipeline_AgentSignal_Armed_DropsTick(t *testing.T) {
 		ArmedProjects:    map[int64]bool{projID: true},
 	})
 	br.IdleSecondsVal = 200 // no focus signal possible
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
 
 	// First tick: establish prev CPU sample.
@@ -842,7 +842,7 @@ func TestPipeline_AgentSignal_Armed_DropsTick(t *testing.T) {
 	}
 	// Second tick: CPU delta over threshold ⇒ agent signal would fire,
 	// but project is armed so the tick must be dropped.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
 	if err := p.RunTick(ctx, 1005); err != nil {
 		t.Fatalf("RunTick #2: %v", err)
 	}
@@ -881,13 +881,13 @@ func TestPipeline_AgentSignal_Unarmed_CountsNormally(t *testing.T) {
 		ArmedProjects:    map[int64]bool{}, // NOT armed
 	})
 	br.IdleSecondsVal = 200
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
 
 	if err := p.RunTick(ctx, 1000); err != nil {
 		t.Fatalf("RunTick #1: %v", err)
 	}
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
 	if err := p.RunTick(ctx, 1005); err != nil {
 		t.Fatalf("RunTick #2: %v", err)
 	}
@@ -924,13 +924,13 @@ func TestPipeline_AutoResume_ArmsAndDropsCurrentTick(t *testing.T) {
 		ArmedProjects:    map[int64]bool{},
 	})
 	br.IdleSecondsVal = 5 // user present — required for auto-resume
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
 
 	if err := p.RunTick(ctx, 1000); err != nil {
 		t.Fatalf("RunTick #1: %v", err)
 	}
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
 	if err := p.RunTick(ctx, 1005); err != nil {
 		t.Fatalf("RunTick #2: %v", err)
 	}
@@ -972,10 +972,10 @@ func TestPipeline_Busy_RiseRequiresSustainedTicks(t *testing.T) {
 	br.CWDByPID = map[int]string{999: "/work/x"}
 
 	// Tick 1: establish prev (no delta yet).
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 0}}
 	_ = p.RunTick(ctx, 1000)
 	// Tick 2: delta 30 ≥ 15 → aboveStreak=1, not yet working (riseTicks=2).
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 30}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 30}}
 	_ = p.RunTick(ctx, 1005)
 	var n int
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
@@ -983,7 +983,7 @@ func TestPipeline_Busy_RiseRequiresSustainedTicks(t *testing.T) {
 		t.Fatalf("after 1 above-bar tick, expected 0 emits (rise not met), got %d", n)
 	}
 	// Tick 3: delta 30 ≥ 15 → aboveStreak=2 → working → emit.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 60}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 60}}
 	_ = p.RunTick(ctx, 1010)
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&n)
 	if n != 1 {
@@ -1005,14 +1005,14 @@ func TestPipeline_Busy_SingleBlipNeverFlips(t *testing.T) {
 	br.IdleSecondsVal = 5
 	br.CWDByPID = map[int]string{999: "/work/x"}
 
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 0}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 0}}
 	_ = p.RunTick(ctx, 1000) // prev
 	// One blip above, then quiet.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 40}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 40}}
 	_ = p.RunTick(ctx, 1005) // aboveStreak=1
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 42}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 42}}
 	_ = p.RunTick(ctx, 1010) // delta 2 < 15 → belowStreak resets above
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 44}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 44}}
 	_ = p.RunTick(ctx, 1015) // delta 2 < 15
 
 	var n int
@@ -1040,7 +1040,7 @@ func TestPipeline_Busy_FallHysteresisBridgesDips(t *testing.T) {
 	seq := []uint64{0, 30, 60} // deltas: -, 30, 30
 	ts := int64(1000)
 	for _, c := range seq {
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
 		_ = p.RunTick(ctx, ts)
 		ts += 5
 	}
@@ -1052,10 +1052,10 @@ func TestPipeline_Busy_FallHysteresisBridgesDips(t *testing.T) {
 
 	// One dip below bar (delta 2) then back above (delta 30). fallTicks=3, so a
 	// single dip must NOT drop working — the dip tick itself still emits.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 62}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 62}}
 	_ = p.RunTick(ctx, ts) // delta 2 < 15 → belowStreak=1, still working → emit
 	ts += 5
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 92}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: 92}}
 	_ = p.RunTick(ctx, ts) // delta 30 → above resets belowStreak → emit
 	ts += 5
 
@@ -1083,7 +1083,7 @@ func TestPipeline_Busy_FallStopsAfterSustainedQuiet(t *testing.T) {
 	// Rise to working: prev + 2 sustained above-bar ticks.
 	ts := int64(1000)
 	for _, c := range []uint64{0, 30, 60} {
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
 		_ = p.RunTick(ctx, ts)
 		ts += 5
 	}
@@ -1093,7 +1093,7 @@ func TestPipeline_Busy_FallStopsAfterSustainedQuiet(t *testing.T) {
 	base := uint64(60)
 	for range 5 {
 		base += 1 // delta 1 < 15
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: base}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: base}}
 		_ = p.RunTick(ctx, ts)
 		ts += 5
 	}
@@ -1125,7 +1125,7 @@ func TestPipeline_Busy_PresentToIdleRegimeDropsModerate(t *testing.T) {
 	c := uint64(0)
 	ts := int64(1000)
 	for range 3 { // prev + 2 above-bar ⇒ working, last tick emits
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
 		_ = p.RunTick(ctx, ts)
 		c += 50
 		ts += 5
@@ -1140,7 +1140,7 @@ func TestPipeline_Busy_PresentToIdleRegimeDropsModerate(t *testing.T) {
 	// belowStreak accrues; ticks 1,2 still emit (working), tick 3 flips off.
 	br.IdleSecondsVal = 200
 	for range 4 {
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
 		_ = p.RunTick(ctx, ts)
 		c += 50
 		ts += 5
@@ -1187,7 +1187,7 @@ func TestPipeline_PausedProject_LowCPUWatcher_DoesNotResume(t *testing.T) {
 	base := uint64(1000)
 	for i := 0; i < 5; i++ {
 		base += 2
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: base}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: base}}
 		_ = p.RunTick(ctx, 1000+int64(i)*5)
 	}
 
@@ -1227,9 +1227,9 @@ func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
 		ArmedProjects:    map[int64]bool{projID: true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: bundle, PID: 1234}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: bundle, PID: 1234}
 	br.FocusedTitle = "armed-then-focused — main"
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 100}}
 	br.CWDByPID = map[int]string{999: cwdPrefix + "/src"}
 
 	// Tick #1: focus disarms; agent has no prev CPU sample yet so no agent tick.
@@ -1237,7 +1237,7 @@ func TestPipeline_AgentSignal_AfterFocusDisarm_Counts(t *testing.T) {
 		t.Fatalf("RunTick #1: %v", err)
 	}
 	// Tick #2: focus tick lands again (still disarmed), agent tick now also lands.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: bin, CPUTicks: 200}}
 	if err := p.RunTick(ctx, 1005); err != nil {
 		t.Fatalf("RunTick #2: %v", err)
 	}
@@ -1270,7 +1270,7 @@ func TestPipeline_Busy_PIDReuseResetsWorkingState(t *testing.T) {
 	// Drive PID 999 (claude) to working: prev + 2 sustained above-bar ticks.
 	ts := int64(1000)
 	for _, c := range []uint64{0, 30, 60} {
-		br.Processes = []macos.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
+		br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "claude", CPUTicks: c}}
 		_ = p.RunTick(ctx, ts)
 		ts += 5
 	}
@@ -1284,7 +1284,7 @@ func TestPipeline_Busy_PIDReuseResetsWorkingState(t *testing.T) {
 	// counter (no CPU regression), so ONLY the binary-name-change path can
 	// reset state. If the reset were missing, the stale working=true would
 	// emit immediately on this tick.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "node", CPUTicks: 200}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "node", CPUTicks: 200}}
 	_ = p.RunTick(ctx, ts) // name change resets activity; delta is large but aboveStreak restarts at 1 → not working
 	ts += 5
 	var afterReuse1 int
@@ -1294,7 +1294,7 @@ func TestPipeline_Busy_PIDReuseResetsWorkingState(t *testing.T) {
 	}
 
 	// Second above-bar tick for the new process → reaches working → emits.
-	br.Processes = []macos.ProcessSample{{PID: 999, Name: "node", CPUTicks: 230}}
+	br.Processes = []osbridge.ProcessSample{{PID: 999, Name: "node", CPUTicks: 230}}
 	_ = p.RunTick(ctx, ts)
 	var afterReuse2 int
 	db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&afterReuse2)

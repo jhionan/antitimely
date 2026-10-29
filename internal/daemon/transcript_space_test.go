@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/rian/antitimely/internal/herdr"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 )
 
 // A session uuid herdr's session.json does not name: the shape of a Claude
@@ -33,7 +33,7 @@ func writeClaudeSessionFile(t *testing.T, dir string, pid int, sessionID string)
 
 // newUnboundSessionPipeline wires a transcript pipeline whose only session is
 // unknown to herdr, with a Claude sessions dir and a fake bridge to probe.
-func newUnboundSessionPipeline(t *testing.T) (*Pipeline, *macos.FakeBridge, string) {
+func newUnboundSessionPipeline(t *testing.T) (*Pipeline, *osbridge.FakeBridge, string) {
 	t.Helper()
 	root := t.TempDir()
 	sessionsDir := t.TempDir()
@@ -42,7 +42,7 @@ func newUnboundSessionPipeline(t *testing.T) (*Pipeline, *macos.FakeBridge, stri
 
 	cache := NewCache()
 	cache.Store(&CacheSnapshot{CwdPatterns: []string{"/work/daas"}})
-	br := &macos.FakeBridge{}
+	br := &osbridge.FakeBridge{}
 	p := NewPipeline(nil, br, cache, PipelineConfig{
 		TranscriptTracking: true,
 		TranscriptRoot:     root,
@@ -146,7 +146,7 @@ func TestCollectTranscript_HerdrBoundSessionSkipsProbe(t *testing.T) {
 
 	cache := NewCache()
 	cache.Store(&CacheSnapshot{CwdPatterns: []string{"/work/daas"}})
-	br := &macos.FakeBridge{EnvByPID: map[int]map[string]string{4242: {"HERDR_PANE_ID": "wM:p1"}}}
+	br := &osbridge.FakeBridge{EnvByPID: map[int]map[string]string{4242: {"HERDR_PANE_ID": "wM:p1"}}}
 	p := NewPipeline(nil, br, cache, PipelineConfig{
 		TranscriptTracking: true, TranscriptRoot: root, TranscriptGraceSec: 600, ClaudeSessionsDir: sessionsDir,
 	})

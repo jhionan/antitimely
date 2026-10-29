@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
 )
@@ -34,7 +34,7 @@ func setupRPCServer(t *testing.T) (*rpc.Client, *sql.DB, *Cache) {
 		DB:                  db,
 		Q:                   store.New(db),
 		Cache:               cache,
-		Bridge:              &macos.FakeBridge{},
+		Bridge:              &osbridge.FakeBridge{},
 		TickIntervalSeconds: 5,
 	}
 

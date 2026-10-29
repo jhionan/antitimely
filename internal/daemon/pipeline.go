@@ -10,7 +10,7 @@ import (
 
 	"github.com/rian/antitimely/internal/domain"
 	"github.com/rian/antitimely/internal/herdr"
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/store"
 )
 
@@ -154,7 +154,7 @@ type Pipeline struct {
 	// transcriptState because the Claude collector prunes what it did not see.
 	codexState map[string]transcriptSession
 	q          *store.Queries
-	bridge     macos.Bridge
+	bridge     osbridge.Bridge
 	cache      *Cache
 	cfg        PipelineConfig
 	prevCPU    map[int]uint64
@@ -257,7 +257,7 @@ const (
 	slowTickBackoffMaxSec   int64 = 300
 )
 
-func NewPipeline(q *store.Queries, b macos.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
+func NewPipeline(q *store.Queries, b osbridge.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	return &Pipeline{
 		q: q, bridge: b, cache: cache, cfg: cfg,
 		prevCPU:          map[int]uint64{},
@@ -576,7 +576,7 @@ func (p *Pipeline) backOffTitle(now int64) int64 {
 func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, now int64) (domain.Signal, bool) {
 	fm, err := p.bridge.Frontmost(ctx)
 	if err != nil {
-		if errors.Is(err, macos.ErrAccessibilityDenied) {
+		if errors.Is(err, osbridge.ErrAccessibilityDenied) {
 			log.Printf("frontmost denied: %v", err)
 			if p.perm != nil {
 				p.perm.Set("accessibility_denied", now)
@@ -608,13 +608,13 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 			if p.perm != nil {
 				p.perm.Set("ok", now)
 			}
-		case errors.Is(terr, macos.ErrAccessibilityDenied):
+		case errors.Is(terr, osbridge.ErrAccessibilityDenied):
 			if p.perm != nil {
 				p.perm.Set("accessibility_denied", now)
 			}
 			p.titleTimeoutStreak = 0
 			log.Printf("title denied; backing off osascript for %ds", p.backOffTitle(now))
-		case errors.Is(terr, macos.ErrOsascriptTimeout):
+		case errors.Is(terr, osbridge.ErrOsascriptTimeout):
 			// A hung osascript is the leak vector: the process can outlive our
 			// SIGKILL (WaitDelay lets us stop waiting on one stuck in an
 			// uninterruptible mach call), so respawning every tick stacks up

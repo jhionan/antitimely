@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rian/antitimely/internal/macos"
+	"github.com/rian/antitimely/internal/osbridge"
 )
 
 // When window-title capture is denied, the daemon must stop spawning the title
@@ -19,8 +19,8 @@ func TestPipeline_TitleDenied_BacksOffOsascript(t *testing.T) {
 		AllowedBundles: map[string]bool{"com.example.app": true},
 	})
 	br.IdleSecondsVal = 5 // user present → focus signal fires
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
-	br.FocusedTitleErr = macos.ErrAccessibilityDenied
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.example.app", PID: 1}
+	br.FocusedTitleErr = osbridge.ErrAccessibilityDenied
 
 	// Tick at 5s intervals for ~50s (10 ticks) — all within one backoff window.
 	for ts := int64(1000); ts < 1050; ts += 5 {
@@ -54,8 +54,8 @@ func TestPipeline_TitleTimeouts_BackOffAfterStreak(t *testing.T) {
 		AllowedBundles: map[string]bool{"com.example.app": true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
-	br.FocusedTitleErr = macos.ErrOsascriptTimeout
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.example.app", PID: 1}
+	br.FocusedTitleErr = osbridge.ErrOsascriptTimeout
 
 	// Ten ticks of nothing but timeouts. Only the ticks up to the streak
 	// threshold may spawn osascript; after that the backoff must hold.
@@ -83,8 +83,8 @@ func TestPipeline_FrontmostNotSuppressedByTitleBackoff(t *testing.T) {
 		AllowedBundles: map[string]bool{"com.example.app": true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
-	br.FocusedTitleErr = macos.ErrAccessibilityDenied
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.example.app", PID: 1}
+	br.FocusedTitleErr = osbridge.ErrAccessibilityDenied
 
 	const ticks = 10
 	for i := 0; i < ticks; i++ {
@@ -109,7 +109,7 @@ func TestPipeline_TitleOK_NoBackoff(t *testing.T) {
 		AllowedBundles: map[string]bool{"com.example.app": true},
 	})
 	br.IdleSecondsVal = 5
-	br.FrontmostInfoVal = macos.FrontmostInfo{BundleID: "com.example.app", PID: 1}
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "com.example.app", PID: 1}
 	br.FocusedTitle = "some window"
 	br.FocusedTitleErr = nil
 
@@ -121,7 +121,7 @@ func TestPipeline_TitleOK_NoBackoff(t *testing.T) {
 	if br.FocusedTitleCalls != 4 {
 		t.Errorf("expected a title read every tick when OK, got %d", br.FocusedTitleCalls)
 	}
-	if errors.Is(nil, macos.ErrAccessibilityDenied) { // keep import used if title path changes
+	if errors.Is(nil, osbridge.ErrAccessibilityDenied) { // keep import used if title path changes
 		t.Fatal("unreachable")
 	}
 }
