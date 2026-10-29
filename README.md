@@ -22,6 +22,22 @@ See `docs/superpowers/specs/2026-05-20-antitimely-design.md` for the full design
 - **macOS launch-agent integration.** Boots at login, restarts on crash.
 - **YAML config** at `~/.antitimely/config.yaml`.
 - **Pure-Go stdlib + sqlite.** No CGO. Single binary, single SQLite file.
+- **Invoice PDFs.** `atl invoice generate` numbers, prices and renders an invoice for a company's unbilled, deduped hours, with client prepayments (advances) drawn down automatically.
+
+## Tech stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Language | **Go 1.26**, no cgo | One binary that is both the daemon and the CLI; builds without a C toolchain |
+| Storage | **SQLite** via [`modernc.org/sqlite`](https://gitlab.com/cznic/sqlite) (pure-Go transpile), WAL mode, one connection | A single file you can back up, query or hand-edit; no CGO |
+| Data access | [**sqlc**](https://sqlc.dev) generates `internal/store` from `schema.sql` + `queries.sql` | Type-checked SQL without an ORM |
+| IPC | stdlib **`net/rpc`** over a Unix-domain socket (`~/.antitimely/antitimely.sock`) | Zero dependencies; the CLI is a thin client of the running daemon |
+| CLI | stdlib **`flag`**, hand-rolled dispatch + interactive menu; `golang.org/x/sys/unix` for raw terminal mode | No framework; the command surface is small |
+| Config | YAML via [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) | `~/.antitimely/config.yaml`, all keys optional |
+| PDF | [`maroto/v2`](https://github.com/johnfercher/maroto) to render invoices, [`ledongthuc/pdf`](https://github.com/ledongthuc/pdf) to read them back in tests | |
+| OS integration | shells out to stock macOS tools: `osascript` (System Events), `ps`, `lsof`, `ioreg` | All behind `internal/macos`, with a fake bridge for tests |
+| Process supervision | **launchd** user agent (`com.rian.antitimely`), driven by `launchctl` | Starts at login, restarts on crash |
+| Signing | `make build` re-signs with a stable Developer ID via `codesign` | macOS keeps the Accessibility grant across rebuilds |
 
 ## Install
 
@@ -64,8 +80,9 @@ atl status                             # live view, grouped by company → proje
 atl review                             # tag any unassigned signatures
 atl report --from=2026-05-13 --to=2026-05-21
 
-# When you send an invoice, mark the cutoff so the next billing cycle starts
-atl invoice send --at=2026-05-20 --note="May invoice" BClouder
+# Bill the unbilled hours: renders a numbered PDF and starts the next billing cycle
+atl invoice generate --dry-run BClouder   # preview first
+atl invoice generate BClouder
 ```
 
 ## How it works
@@ -80,7 +97,7 @@ On every tick the daemon gathers up to three kinds of **observation**, each a fi
 |---|---|---|
 | **focus** | The frontmost app, via AppleScript against *System Events* (`osascript`) — its bundle id, name, and focused window title. Collected only while you're at the keyboard. | bundle id + window title (no cwd) |
 | **agent** | `ps -A` lists every process with its cumulative CPU time. The daemon diffs each PID's CPU against the previous poll; processes burning sustained CPU (the "busy bar", with rise/fall hysteresis — see [What counts as "active"](#what-counts-as-active)) qualify. For each, the working directory is read with `lsof -p <pid> -d cwd`. | binary name + cwd |
-| **transcript** | Tails Claude Code session files under `~/.claude/projects/<dir>/*.jsonl`, reading the `cwd` and last-activity timestamp straight from the transcript. Needs no CPU, no focus, not even a local process. | cwd + session id |
+| **transcript** | Reads coding-agent session logs: tails Claude Code's `~/.claude/projects/<dir>/*.jsonl` and Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, and queries opencode's `~/.local/share/opencode/opencode.db` read-only. Takes the `cwd` and last-activity time from the log itself. Needs no CPU, no focus, not even a local process. | cwd + session id |
 
 The agent signal is what captures **parallel work**: `ps` sees three `claude` processes in three directories at once, and each becomes its own observation.
 
@@ -168,9 +185,9 @@ The daemon combines three independent signals to track work:
 
 - **Focus signal** — your foreground window's application and title (tells which project you're looking at)
 - **Agent CPU signal** — processes matching your allowlist burning sustained CPU in a tracked project directory (picks up work the process is doing, and credits it even when you've switched windows)
-- **Transcript signal** — Claude Code sessions actively writing transcripts to a tracked project directory (captures remote work and planning sessions that generate no local CPU or window focus)
+- **Transcript signal** — Claude Code, Codex and opencode sessions writing to a tracked project directory (captures remote work and planning sessions that generate no local CPU or window focus). For Codex, which is usually opened on a parent folder, the repo is taken from the agent's command events rather than the session's own cwd
 
-Transcript activity **overrides pause** — if a project is paused but you're actively working on it via Claude Code, the daemon resumes ticking automatically. Transcript counting stops when the session is idle for longer than the grace period (default 10 minutes).
+Transcript activity **overrides pause** — if a project is paused but you're actively working on it through an agent session, the daemon resumes ticking automatically. Transcript counting stops when the session is idle for longer than the grace period (default 10 minutes).
 
 Configure via:
 
@@ -178,6 +195,8 @@ Configure via:
 transcript_tracking: true         # enable transcript watching
 transcript_grace: 10m             # session counts this long after last turn
 transcript_root: ~/.claude/projects
+opencode_db: ~/.local/share/opencode/opencode.db   # "off" disables opencode
+codex_root: ~/.codex/sessions                       # "off" disables Codex
 ```
 
 ### Generating work summaries
@@ -253,14 +272,19 @@ Precedence: defaults → config file → CLI flags on `atl daemon`.
 | `atl watch add app\|binary <id>` | allowlist a program |
 | `atl watch list\|remove` | … |
 | `atl rules list\|delete <id>` | manage match rules |
-| `atl invoice send [--at=<date>] [--note=<...>] <company>` | record an invoice cutoff |
+| `atl invoice generate <company> [--from --to --issue-date --note --discount --no-credit --dry-run]` | number and render an invoice PDF for the unbilled, deduped hours, applying any advance credit, and close the billing period |
+| `atl invoice advance <company> --amount=N` | record a client prepayment; later invoices draw it down |
+| `atl invoice balance <company>` | remaining advance credit |
+| `atl invoice send [--at=<date>] [--note=<...>] <company>` | record an invoice cutoff **only** (no PDF, no number) |
 | `atl invoice list [<company>]` | invoice history |
 | `atl invoice delete <id>` | remove an invoice |
+| `atl end-day` / `atl start-day` | pause / resume every project |
 | `atl reset all\|ticks [--yes]` | wipe data (`ticks` keeps projects/rules; `all` wipes everything) |
 | `atl config init\|show\|path` | manage `~/.antitimely/config.yaml` |
 | `atl install-launch-agent` | install launchd plist + start daemon |
 | `atl uninstall-launch-agent` | stop daemon + remove launchd plist |
 | `atl restart` | restart the running daemon (`launchctl kickstart -k`) |
+| `atl grant-accessibility` | open the macOS Accessibility pane for window-title capture |
 | `atl debug frontmost\|windows\|idle` | inspect what the macOS bridge sees right now |
 | `atl daemon [flags]` | run the daemon in the foreground (debugging) |
 | `atl help` | full usage |
@@ -306,7 +330,9 @@ internal/
 ├── domain/      pure Go: types, rule matching, rule generalization (zero deps)
 ├── store/       sqlc-generated SQLite bindings (regenerate with `make sqlc`)
 ├── macos/       the only place subprocesses live (osascript/ps/lsof/ioreg)
-├── daemon/      pipeline, polling, cache, RPC handlers, lifecycle
+├── daemon/      pipeline, polling, cache, RPC handlers, WAL checkpointer, lifecycle
+├── invoice/     invoice numbering, line items, advance-credit drawdown, PDF rendering
+├── herdr/       resolves herdr panes and Claude sessions to workspaces (fails closed)
 ├── rpcapi/      shared net/rpc types between daemon and CLI
 └── cli/         subcommand dispatch + interactive menu
 ```
