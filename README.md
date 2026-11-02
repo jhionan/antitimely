@@ -214,6 +214,27 @@ Flags:
 - `--all-authors` — include commits by all authors (default: only yours via `git config user.email`)
 - `--txt` — plain text instead of markdown
 
+### BClouder timesheets
+
+The default billing workflow produces a timesheet with daily hours separated by
+BClouder **modules and submodules**, such as Packing Slips, Deduction,
+PS - Cargo Dockers, PS - Auto Matcher, and MD - Cleanse. These categories are
+assigned from work evidence when preparing the report; shared repository names
+and the tracker's project labels are only hints.
+
+Module hours may overlap. The report shows **Invoice hours** separately, counting
+simultaneous company work once, so it does not present a combined 30-hour day as
+daily worked time. Unclear allocation remains shared/unallocated. The CSV and PDF
+include module totals, invoice reconciliation and verified work descriptions.
+
+See [the billing runbook](docs/billing-runbook.md) before generating an invoice or
+timesheet. This is currently a manual reporting workflow; there is no
+`atl timesheet` command. Antitimely still uses project records for collection,
+but BClouder's buckets represent its **clients: Rumo and VCNA**. DaaS,
+Master Data and Deduction are classified as modules/submodules inside the
+timesheet, not separate tracking buckets. Reports can therefore follow
+**client → module → submodule**, while the invoice remains company-wide.
+
 ### Agents driving the CLI
 
 Agents themselves can use the CLI to query or update state. Useful patterns:
