@@ -18,7 +18,10 @@ type Bridge interface {
 	IdleSeconds(ctx context.Context) (int, error)
 	ListProcesses(ctx context.Context) ([]ProcessSample, error)
 	ProcessCWD(ctx context.Context, pid int) (string, error)
-	ProcessEnvVar(ctx context.Context, pid int, key string) (string, error)
+	// ProcessEnvVars reads several environment variables of pid in one probe.
+	// Absent keys are omitted from the map (or map to ""); a gone pid yields
+	// an empty map and nil error.
+	ProcessEnvVars(ctx context.Context, pid int, keys ...string) (map[string]string, error)
 }
 
 type FrontmostInfo struct {

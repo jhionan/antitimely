@@ -50,7 +50,7 @@ type FakeBridge struct {
 	// EnvErr applies to every pid when set.
 	EnvErr error
 
-	// EnvCalls counts ProcessEnvVar invocations so tests can assert the
+	// EnvCalls counts ProcessEnvVars invocations so tests can assert the
 	// daemon probes a pid's environment once rather than every tick.
 	EnvCalls int
 }
@@ -81,12 +81,18 @@ func (f *FakeBridge) ProcessCWD(ctx context.Context, pid int) (string, error) {
 	}
 	return f.CWDByPID[pid], nil
 }
-func (f *FakeBridge) ProcessEnvVar(ctx context.Context, pid int, key string) (string, error) {
+func (f *FakeBridge) ProcessEnvVars(ctx context.Context, pid int, keys ...string) (map[string]string, error) {
 	f.EnvCalls++
 	if f.EnvErr != nil {
-		return "", f.EnvErr
+		return nil, f.EnvErr
 	}
-	return f.EnvByPID[pid][key], nil
+	m := map[string]string{}
+	for _, k := range keys {
+		if v := f.EnvByPID[pid][k]; v != "" {
+			m[k] = v
+		}
+	}
+	return m, nil
 }
 
 // Compile-time assertion that *FakeBridge satisfies Bridge.

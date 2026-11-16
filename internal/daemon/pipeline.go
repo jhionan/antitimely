@@ -746,7 +746,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		// (and billing whatever its cwd rule says) for its whole life.
 		paneID, paneKnown := p.procPane[proc.PID]
 		if !paneKnown {
-			v, err := p.bridge.ProcessEnvVar(ctx, proc.PID, "HERDR_PANE_ID")
+			env, err := p.bridge.ProcessEnvVars(ctx, proc.PID, herdr.PaneEnvKeys...)
 			if err != nil {
 				// A failed probe must not drop the signal, and must not be
 				// cached either — caching would wrongly pin this pid to
@@ -755,6 +755,7 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				// "don't cache an empty cwd" precedent just below.
 				log.Printf("env pid=%d: %v", proc.PID, err)
 			} else {
+				v := herdr.PaneFromEnv(env)
 				// A successful probe finding no variable is a real answer
 				// (the process is not under herdr) and is cached, so
 				// non-herdr processes aren't re-probed every tick.

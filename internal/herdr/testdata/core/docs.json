@@ -1,0 +1,4 @@
+{"herdr-app":{"value":{"spaces":[
+ {"id":"spAAA","name":"Bclouder","tabs":[{"id":"tb1","root":{"type":"row","children":[{"type":"block","content":{"terminal":"t5"}}]}}]},
+ {"id":"spBBB","name":"","tabs":[{"id":"tb2","root":{"type":"row","children":[{"type":"block","content":{"terminal":"t15"}},{"type":"column","children":[{"type":"block","content":{"terminal":"t18"}}]}]}}]}
+]},"version":17}}

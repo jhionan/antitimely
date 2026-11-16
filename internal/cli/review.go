@@ -24,7 +24,7 @@ func cmdReview(args []string) int {
 	// One resolver for the whole session: it re-stats session.json per call
 	// and only re-parses when it changed, so reuse costs nothing and picks
 	// up a rename made while reviewing.
-	spaces := herdr.NewResolver(herdr.DefaultSessionPath())
+	spaces := herdr.NewDefaultResolver()
 
 	for {
 		var pending rpcapi.PendingReviewReply

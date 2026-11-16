@@ -31,6 +31,11 @@ func TestDaemonPipelineUsesRealHerdrSessionPath(t *testing.T) {
 	if filepath.Base(want) != "session.json" || !strings.Contains(want, "herdr") {
 		t.Fatalf("DefaultSessionPath() = %q, want herdr's session.json", want)
 	}
+	// The Herdr GUI (herdr-core) source must be on too, or every GUI pane
+	// bills by cwd alone.
+	if got, want := p.herdr.CoreDir(), herdr.DefaultCoreDir(); got == "" || got != want {
+		t.Fatalf("pipeline resolver core dir = %q, want %q", got, want)
+	}
 
 	// And the inert default really is inert, which is what makes the check
 	// above meaningful rather than tautological.

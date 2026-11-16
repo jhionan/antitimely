@@ -101,7 +101,7 @@ func rulesList() int {
 	}
 	// A bare workspace id ("wN") says nothing about which client a rule
 	// binds; resolve it to "name (id)" whenever herdr still knows the space.
-	spaces := herdr.NewResolver(herdr.DefaultSessionPath())
+	spaces := herdr.NewDefaultResolver()
 	fmt.Printf("%-4s %-3s %-15s %-30s %-30s %-15s %-30s %s\n",
 		"ID", "PRI", "PROJECT", "BUNDLE", "TITLE", "BINARY", "CWD-PREFIX", "SPACE")
 	for _, r := range reply.Items {

@@ -31,17 +31,31 @@ import (
 // production and a cross-uid read fails closed to "absent" rather than
 // erroring.
 func ProcessEnvVarReal(ctx context.Context, pid int, key string) (string, error) {
+	m, err := ProcessEnvVarsReal(ctx, pid, key)
+	return m[key], err
+}
+
+// ProcessEnvVarsReal is ProcessEnvVarReal for several keys with a single ps
+// call; the same whitespace and cross-uid contract applies to every key. Keys
+// that are absent are left out of the returned map.
+func ProcessEnvVarsReal(ctx context.Context, pid int, keys ...string) (map[string]string, error) {
 	cctx, cancel := withTimeout(ctx, psDeadline)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, "ps", "-Eww", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 1 {
-			return "", nil // pid gone between ps -A and now
+			return map[string]string{}, nil // pid gone between ps -A and now
 		}
-		return "", fmt.Errorf("ps -E pid=%d: %w", pid, err)
+		return nil, fmt.Errorf("ps -E pid=%d: %w", pid, err)
 	}
-	return parseEnvVar(string(out), key), nil
+	m := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if v := parseEnvVar(string(out), k); v != "" {
+			m[k] = v
+		}
+	}
+	return m, nil
 }
 
 // parseEnvVar scans ps -E output for a KEY=VALUE token and returns VALUE.

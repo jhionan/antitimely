@@ -62,6 +62,31 @@ func TestAgentSignalCarriesHerdrSpace(t *testing.T) {
 	}
 }
 
+// TestAgentSignalCarriesHerdrGUISpace covers panes of the Herdr GUI
+// (herdr-core): they set HC_TERMINAL_ID instead of HERDR_PANE_ID, and an
+// agent-spawned terminal (t13) carries no space label of its own, so the space
+// comes from its parent terminal. Both env vars are read in one probe.
+func TestAgentSignalCarriesHerdrGUISpace(t *testing.T) {
+	const cwd = "/repo/daas-front-end"
+	p, br, _, db := newTestPipeline(t)
+	defer db.Close()
+	br.Processes = []osbridge.ProcessSample{{PID: 110, Name: "claude", CPUTicks: 0}}
+	br.CWDByPID = map[int]string{110: cwd}
+	br.EnvByPID = map[int]map[string]string{110: {"HC_TERMINAL_ID": "t13"}}
+	p.herdr = herdr.NewResolverWithCore("../herdr/testdata/session.json", "../herdr/testdata/core")
+
+	p.collectAgentSignals(context.Background(), snapWithCwdPattern(cwd), true)
+	br.Processes[0].CPUTicks = 10_000
+	sigs := p.collectAgentSignals(context.Background(), snapWithCwdPattern(cwd), true)
+
+	if len(sigs) != 1 || sigs[0].SpaceID != "spAAA" {
+		t.Fatalf("want one signal in GUI space spAAA, got %+v", sigs)
+	}
+	if br.EnvCalls != 1 {
+		t.Fatalf("ProcessEnvVars called %d times, want 1 (both vars in one probe, cached)", br.EnvCalls)
+	}
+}
+
 func TestAgentSignalWithoutHerdrHasEmptySpace(t *testing.T) {
 	const cwd = "/repo/daas-back-end"
 	p, br, _, db := newTestPipeline(t)
@@ -216,7 +241,7 @@ func TestAgentEnvProbedOncePerPID(t *testing.T) {
 		}
 	}
 	if br.EnvCalls != 1 {
-		t.Fatalf("ProcessEnvVar called %d times; a successful probe that finds no "+
+		t.Fatalf("ProcessEnvVars called %d times; a successful probe that finds no "+
 			"variable must be cached (one probe per pid)", br.EnvCalls)
 	}
 }

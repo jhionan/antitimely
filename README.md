@@ -115,7 +115,7 @@ An agent process is tracked if **either** its binary is allowlisted **or** its w
 Each unique `(source, bundle id, window title, binary name, cwd, space id)` tuple is stored once as an observation; thousands of ticks then reference that single row. To attribute it, the daemon runs your **rules** in order (priority, then age) and takes the first whose every set field matches:
 
 - **cwd prefix** — the process's working directory equals, or is a subdirectory of, the rule's path (matched literally — casing must match the real folder). A `*` as the pattern's **final character** makes it a glob over the last path segment, so `.../worktrees/md-*` matches every current and future `md-` worktree and anything nested inside it
-- **herdr space** — the [herdr](https://github.com/) workspace the process was launched in, resolved from its `HERDR_PANE_ID`. This is the only field that can separate two spaces sharing one working directory; see `atl spaces` for the ids
+- **herdr space** — the [herdr](https://github.com/) workspace the process was launched in, resolved from its `HERDR_PANE_ID` (herdr TUI, ids like `w29`) or `HC_TERMINAL_ID` (the Herdr GUI / herdr-core, ids like `sp6437…`; a terminal an agent spawned inherits its parent terminal's space). This is the only field that can separate two spaces sharing one working directory; see `atl spaces` for the ids
 - **bundle id** / **binary name** — exact match
 - **window title** — substring match
 
@@ -354,7 +354,7 @@ internal/
 │                macOS implementation in *_darwin.go (osascript/ps/lsof/ioreg)
 ├── daemon/      pipeline, polling, cache, RPC handlers, WAL checkpointer, lifecycle
 ├── invoice/     invoice numbering, line items, advance-credit drawdown, PDF rendering
-├── herdr/       resolves herdr panes and Claude sessions to workspaces (fails closed)
+├── herdr/       resolves herdr TUI panes and Herdr GUI (herdr-core) terminals and Claude sessions to workspaces (fails closed)
 ├── rpcapi/      shared net/rpc types between daemon and CLI
 └── cli/         subcommand dispatch + interactive menu
 ```

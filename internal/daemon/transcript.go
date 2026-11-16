@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/rian/antitimely/internal/herdr"
 	"io"
 	"log"
 	"os"
@@ -190,15 +191,15 @@ func (p *Pipeline) transcriptSpace(ctx context.Context, sessionID string, pids *
 		if !ok {
 			return "" // not running, or not yet registered: retry next tick
 		}
-		v, err := p.bridge.ProcessEnvVar(ctx, pid, "HERDR_PANE_ID")
+		env, err := p.bridge.ProcessEnvVars(ctx, pid, herdr.PaneEnvKeys...)
 		if err != nil {
 			// Not cached: one transient failure must not pin the session to
 			// cwd-only matching for life (same contract as procPane).
 			log.Printf("env pid=%d session=%s: %v", pid, sessionID, err)
 			return ""
 		}
-		paneID = v
-		p.sessionPane[sessionID] = v
+		paneID = herdr.PaneFromEnv(env)
+		p.sessionPane[sessionID] = paneID
 	}
 	if paneID == "" {
 		return ""

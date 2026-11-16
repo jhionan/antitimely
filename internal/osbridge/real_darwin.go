@@ -64,8 +64,8 @@ func (r *RealBridge) ListProcesses(ctx context.Context) ([]ProcessSample, error)
 func (r *RealBridge) ProcessCWD(ctx context.Context, pid int) (string, error) {
 	return ProcessCWDReal(ctx, pid)
 }
-func (r *RealBridge) ProcessEnvVar(ctx context.Context, pid int, key string) (string, error) {
-	return ProcessEnvVarReal(ctx, pid, key)
+func (r *RealBridge) ProcessEnvVars(ctx context.Context, pid int, keys ...string) (map[string]string, error) {
+	return ProcessEnvVarsReal(ctx, pid, keys...)
 }
 
 // Compile-time assertion that *RealBridge implements Bridge.

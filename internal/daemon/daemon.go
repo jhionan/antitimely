@@ -140,7 +140,7 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 // green. TestDaemonPipelineUsesRealHerdrSessionPath is that assertion.
 func newDaemonPipeline(q *store.Queries, bridge osbridge.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	p := NewPipeline(q, bridge, cache, cfg)
-	p.herdr = herdr.NewResolver(herdr.DefaultSessionPath())
+	p.herdr = herdr.NewDefaultResolver()
 	return p
 }
 

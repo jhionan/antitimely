@@ -1,0 +1,10 @@
+{"next_id":20,"terminals":{
+ "5":{"address":"t5","labels":{"herdr.space":"spAAA","where":"Bclouder / boss5"},"parent":null,"state":"live"},
+ "13":{"address":"t13","labels":{"where":"Bclouder / boss5"},"parent":"t5","state":"live"},
+ "14":{"address":"t14","labels":{},"parent":"t13","state":"live"},
+ "15":{"address":"t15","labels":{},"parent":null,"state":"live"},
+ "16":{"address":"t16","labels":{"herdr.space":"spGONE","where":"Old / 1"},"parent":null,"state":"finished"},
+ "17":{"address":"t17","labels":{},"parent":null,"state":"live"},
+ "30":{"address":"t30","labels":{},"parent":"t31","state":"live"},
+ "31":{"address":"t31","labels":{},"parent":"t30","state":"live"}
+}}

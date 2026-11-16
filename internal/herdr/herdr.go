@@ -61,16 +61,43 @@ type Resolver struct {
 	warned   bool              // true once a failure has been logged, until the next successful parse
 	spaces   map[string]Space  // workspace id -> Space
 	sessions map[string]string // claude session uuid -> workspace id
+
+	core *coreState // herdr-core (Herdr GUI) state; nil = not consulted
 }
 
+// NewResolver reads only the herdr TUI's session.json.
 func NewResolver(path string) *Resolver {
 	return &Resolver{path: path}
 }
 
-// SpaceForPane resolves a HERDR_PANE_ID such as "wN:p1" to its workspace.
+// NewResolverWithCore reads the TUI's session.json and, for "hc:" pane
+// tokens, the herdr-core state directory used by the Herdr GUI. Either may be
+// empty to disable that source.
+func NewResolverWithCore(sessionPath, coreDir string) *Resolver {
+	r := &Resolver{path: sessionPath}
+	if coreDir != "" {
+		r.core = &coreState{dir: coreDir}
+	}
+	return r
+}
+
+// NewDefaultResolver resolves both the herdr TUI and the Herdr GUI at their
+// default locations. This is what the daemon and CLI use.
+func NewDefaultResolver() *Resolver {
+	return NewResolverWithCore(DefaultSessionPath(), DefaultCoreDir())
+}
+
+// SpaceForPane resolves a HERDR_PANE_ID such as "wN:p1" to its workspace, or
+// a herdr-core pane token such as "hc:t13" (see CorePaneID) to its GUI space.
 func (r *Resolver) SpaceForPane(paneID string) (Space, bool) {
 	if paneID == "" {
 		return Space{}, false
+	}
+	if term, ok := strings.CutPrefix(paneID, CorePanePrefix); ok {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.core.reloadLocked()
+		return r.core.spaceForTerminalLocked(term)
 	}
 	wid, _, _ := strings.Cut(paneID, ":")
 	if wid == "" {
@@ -112,8 +139,15 @@ func (r *Resolver) Space(id string) (Space, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.reloadLocked()
-	s, ok := r.spaces[id]
-	return s, ok
+	if s, ok := r.spaces[id]; ok {
+		return s, true
+	}
+	if r.core != nil {
+		r.core.reloadLocked()
+		s, ok := r.core.spaces[id]
+		return s, ok
+	}
+	return Space{}, false
 }
 
 // Path returns the session.json path this resolver reads. NewPipeline
@@ -121,6 +155,15 @@ func (r *Resolver) Space(id string) (Space, bool) {
 // safe in tests), so this is how a test can tell a production-wired daemon
 // pipeline from that inert default.
 func (r *Resolver) Path() string { return r.path }
+
+// CoreDir returns the herdr-core state directory this resolver reads, or ""
+// when the GUI source is off.
+func (r *Resolver) CoreDir() string {
+	if r.core == nil {
+		return ""
+	}
+	return r.core.dir
+}
 
 // Spaces returns every known workspace, ordered by id.
 func (r *Resolver) Spaces() []Space {
@@ -130,6 +173,12 @@ func (r *Resolver) Spaces() []Space {
 	out := make([]Space, 0, len(r.spaces))
 	for _, s := range r.spaces {
 		out = append(out, s)
+	}
+	if r.core != nil {
+		r.core.reloadLocked()
+		for _, s := range r.core.spaces {
+			out = append(out, s)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

@@ -74,6 +74,21 @@ func TestCollectTranscript_UnboundSessionInheritsProcessPaneSpace(t *testing.T) 
 		t.Fatalf("SpaceID = %q, want %q (inherited from the session process's pane)", sigs[0].SpaceID, "wN")
 	}
 }
+// TestCollectTranscript_GUISessionResolvesViaHerdrCore: a Claude session in a
+// Herdr GUI pane is named nowhere in the TUI's session.json; its process
+// carries HC_TERMINAL_ID, resolved through herdr-core's terminals.json.
+func TestCollectTranscript_GUISessionResolvesViaHerdrCore(t *testing.T) {
+	p, br, sessionsDir := newUnboundSessionPipeline(t)
+	p.herdr = herdr.NewResolverWithCore("../herdr/testdata/session.json", "../herdr/testdata/core")
+	writeClaudeSessionFile(t, sessionsDir, 4242, unboundSessionID)
+	br.EnvByPID = map[int]map[string]string{4242: {"HC_TERMINAL_ID": "t14"}}
+
+	sigs := p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), transcriptNow)
+	if len(sigs) != 1 || sigs[0].SpaceID != "spAAA" {
+		t.Fatalf("want 1 signal in GUI space spAAA, got %+v", sigs)
+	}
+}
+
 
 // TestCollectTranscript_PaneBindingOutlivesSessionProcess: Claude Code deletes
 // sessions/<pid>.json when the process exits, but its transcript keeps billing
@@ -95,7 +110,7 @@ func TestCollectTranscript_PaneBindingOutlivesSessionProcess(t *testing.T) {
 		t.Fatalf("after the process exits: want 1 signal in wN, got %+v", sigs)
 	}
 	if br.EnvCalls != 1 {
-		t.Fatalf("ProcessEnvVar called %d times, want 1: a learned pane must not be re-probed", br.EnvCalls)
+		t.Fatalf("ProcessEnvVars called %d times, want 1: a learned pane must not be re-probed", br.EnvCalls)
 	}
 }
 
@@ -113,7 +128,7 @@ func TestCollectTranscript_NonHerdrSessionProbedOnce(t *testing.T) {
 		}
 	}
 	if br.EnvCalls != 1 {
-		t.Fatalf("ProcessEnvVar called %d times, want 1", br.EnvCalls)
+		t.Fatalf("ProcessEnvVars called %d times, want 1", br.EnvCalls)
 	}
 }
 
@@ -157,6 +172,6 @@ func TestCollectTranscript_HerdrBoundSessionSkipsProbe(t *testing.T) {
 		t.Fatalf("want 1 signal in wN (herdr's binding), got %+v", sigs)
 	}
 	if br.EnvCalls != 0 {
-		t.Fatalf("ProcessEnvVar called %d times, want 0 for a herdr-bound session", br.EnvCalls)
+		t.Fatalf("ProcessEnvVars called %d times, want 0 for a herdr-bound session", br.EnvCalls)
 	}
 }
