@@ -9,7 +9,7 @@ import (
 // the given time range. Existing (ts, project_id) pairs are skipped so the
 // call is safe to re-run.
 func (s *AntitimelyService) TranscriptImport(args rpcapi.TranscriptImportArgs, reply *rpcapi.TranscriptImportReply) error {
-	n, err := importTranscripts(s.DB, store.New(s.DB), s.Cache.Snapshot(), s.TranscriptRoot, args.FromUnix, args.ToUnix, s.TranscriptGraceSec, s.TickIntervalSeconds)
+	n, err := importTranscripts(s.DB, store.New(s.DB), s.Cache.Snapshot(), s.TranscriptRoots, args.FromUnix, args.ToUnix, s.TranscriptGraceSec, s.TickIntervalSeconds)
 	if err != nil {
 		return err
 	}

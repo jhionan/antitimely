@@ -37,7 +37,9 @@ type Config struct {
 	PIDPath            string
 	TranscriptTracking bool
 	TranscriptGraceSec int
-	TranscriptRoot     string
+	// TranscriptRoots are Claude Code projects/ dirs, one per config dir
+	// (~/.claude, ~/.claude-work, …). Empty disables Claude transcripts.
+	TranscriptRoots []string
 	// OpencodeDB is opencode's SQLite store, read as a transcript source.
 	// Empty disables it.
 	OpencodeDB string
@@ -64,7 +66,7 @@ func DefaultConfig() (Config, error) {
 		PIDPath:            filepath.Join(dir, "antitimely.pid"),
 		TranscriptTracking: true,
 		TranscriptGraceSec: 600,
-		TranscriptRoot:     defaultTranscriptRoot(),
+		TranscriptRoots:    defaultTranscriptRoots(),
 		OpencodeDB:         defaultOpencodeDB(),
 		CodexRoot:          defaultCodexRoot(),
 	}, nil
@@ -110,9 +112,9 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 	}
 	// Claude Code keeps its per-process session registry beside the
 	// transcripts, in the same config dir.
-	claudeSessionsDir := ""
-	if cfg.TranscriptRoot != "" {
-		claudeSessionsDir = filepath.Join(filepath.Dir(cfg.TranscriptRoot), "sessions")
+	var claudeRoots []ClaudeRoot
+	for _, r := range cfg.TranscriptRoots {
+		claudeRoots = append(claudeRoots, ClaudeRoot{Projects: r, Sessions: filepath.Join(filepath.Dir(r), "sessions")})
 	}
 	return PipelineConfig{
 		IdleThresholdSec:     cfg.IdleThresholdSec,
@@ -122,9 +124,8 @@ func pipelineConfigFor(cfg Config) PipelineConfig {
 		AgentBusyRiseTicks:   cfg.AgentBusyRiseTicks,
 		AgentBusyFallTicks:   cfg.AgentBusyFallTicks,
 		TranscriptTracking:   cfg.TranscriptTracking,
-		TranscriptRoot:       cfg.TranscriptRoot,
+		ClaudeRoots:          claudeRoots,
 		TranscriptGraceSec:   cfg.TranscriptGraceSec,
-		ClaudeSessionsDir:    claudeSessionsDir,
 		OpencodeDB:           cfg.OpencodeDB,
 		CodexRoot:            cfg.CodexRoot,
 		TickBudget:           tickBudget,
@@ -206,7 +207,7 @@ func Run(cfg Config, schemaSQL string) error {
 		TickIntervalSeconds: cfg.IntervalSeconds,
 		Perm:                pt,
 		StartedAtUnix:       time.Now().Unix(),
-		TranscriptRoot:      cfg.TranscriptRoot,
+		TranscriptRoots:     cfg.TranscriptRoots,
 		TranscriptGraceSec:  cfg.TranscriptGraceSec,
 	}
 	if err := svc.ReloadCache(); err != nil {

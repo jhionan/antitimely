@@ -66,7 +66,7 @@ func newTranscriptPipeline(t *testing.T, root string, graceSec int, prefixes []s
 	cache.Store(&CacheSnapshot{CwdPatterns: prefixes})
 	p := NewPipeline(nil, nil, cache, PipelineConfig{
 		TranscriptTracking: true,
-		TranscriptRoot:     root,
+		ClaudeRoots:        []ClaudeRoot{{Projects: root}},
 		TranscriptGraceSec: graceSec,
 	})
 	return p, cache
@@ -135,7 +135,7 @@ func TestCollectTranscript_SpaceBoundAdmitsWithoutCwdMatch(t *testing.T) {
 	})
 	p := NewPipeline(nil, nil, cache, PipelineConfig{
 		TranscriptTracking: true,
-		TranscriptRoot:     root,
+		ClaudeRoots:        []ClaudeRoot{{Projects: root}},
 		TranscriptGraceSec: 600,
 	})
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")

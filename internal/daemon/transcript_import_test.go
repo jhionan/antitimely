@@ -21,7 +21,7 @@ func TestImportTranscripts_StitchesAndSkipsExisting(t *testing.T) {
 
 	from := int64(1782266400) // 2026-06-24T02:00:00Z
 	to := int64(1782270000)   // 2026-06-24T03:00:00Z
-	inserted, err := importTranscripts(db, store.New(db), cache.Snapshot(), root, from, to, 600, 5)
+	inserted, err := importTranscripts(db, store.New(db), cache.Snapshot(), []string{root}, from, to, 600, 5)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestImportTranscripts_StitchesAndSkipsExisting(t *testing.T) {
 	}
 
 	// Re-running imports nothing (idempotent skip of existing (ts,project)).
-	again, err := importTranscripts(db, store.New(db), cache.Snapshot(), root, from, to, 600, 5)
+	again, err := importTranscripts(db, store.New(db), cache.Snapshot(), []string{root}, from, to, 600, 5)
 	if err != nil {
 		t.Fatalf("reimport: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestImportTranscripts_SkipsOffsetGridOverlap(t *testing.T) {
 		}
 	}
 
-	inserted, err := importTranscripts(db, store.New(db), cache.Snapshot(), root, B, B+240, 600, 5)
+	inserted, err := importTranscripts(db, store.New(db), cache.Snapshot(), []string{root}, B, B+240, 600, 5)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}

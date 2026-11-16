@@ -60,29 +60,53 @@ func parseTranscriptTail(data []byte) (cwd string, newestUnix int64, ok bool) {
 	return cwd, newestUnix, ok
 }
 
-// collectTranscriptSignals scans transcript session files under
-// cfg.TranscriptRoot and emits a transcript signal for each session whose
-// resolved cwd is under a tracked prefix and whose newest turn is within the
-// grace window. Tail-reads via per-session byte offset so large transcripts
-// aren't re-parsed each tick.
+// ClaudeRoot is one Claude Code config dir (~/.claude, ~/.claude-work, …):
+// its projects/ transcripts and its sessions/<pid>.json registry, used to
+// find the process behind a transcript herdr doesn't know. Sessions empty ⇒
+// that fallback is off for this root.
+type ClaudeRoot struct {
+	Projects string
+	Sessions string
+}
+
+// collectTranscriptSignals scans transcript session files under every
+// cfg.ClaudeRoots projects dir and emits a transcript signal for each session
+// whose resolved cwd is under a tracked prefix and whose newest turn is within
+// the grace window. Tail-reads via per-session byte offset so large
+// transcripts aren't re-parsed each tick.
 func (p *Pipeline) collectTranscriptSignals(ctx context.Context, snap *CacheSnapshot, now int64) []domain.Signal {
-	if !p.cfg.TranscriptTracking || p.cfg.TranscriptRoot == "" {
+	if !p.cfg.TranscriptTracking || len(p.cfg.ClaudeRoots) == 0 {
 		return nil
 	}
-	grace := int64(p.cfg.TranscriptGraceSec)
-	projDirs, err := os.ReadDir(p.cfg.TranscriptRoot)
-	if err != nil {
-		return nil // root absent ⇒ nothing to do
-	}
-
 	live := map[string]bool{}
-	var pids map[string]int // loaded at most once per tick, on first need
 	var out []domain.Signal
+	for _, root := range p.cfg.ClaudeRoots {
+		out = p.collectClaudeRoot(ctx, snap, now, root, live, out)
+	}
+	// Prune state for files that no longer exist under any root.
+	for path := range p.transcriptState {
+		if !live[path] {
+			delete(p.transcriptState, path)
+			delete(p.sessionPane, strings.TrimSuffix(filepath.Base(path), ".jsonl"))
+		}
+	}
+	return out
+}
+
+// collectClaudeRoot scans one config dir's projects/, marking every transcript
+// it sees in live and appending its signals to out.
+func (p *Pipeline) collectClaudeRoot(ctx context.Context, snap *CacheSnapshot, now int64, root ClaudeRoot, live map[string]bool, out []domain.Signal) []domain.Signal {
+	grace := int64(p.cfg.TranscriptGraceSec)
+	projDirs, err := os.ReadDir(root.Projects)
+	if err != nil {
+		return out // root absent ⇒ nothing to do
+	}
+	var pids map[string]int // this root's registry, loaded at most once per tick, on first need
 	for _, pd := range projDirs {
 		if !pd.IsDir() {
 			continue
 		}
-		sessDir := filepath.Join(p.cfg.TranscriptRoot, pd.Name())
+		sessDir := filepath.Join(root.Projects, pd.Name())
 		entries, err := os.ReadDir(sessDir)
 		if err != nil {
 			continue
@@ -144,7 +168,7 @@ func (p *Pipeline) collectTranscriptSignals(ctx context.Context, snap *CacheSnap
 			// Without this, a space-only-bound project would silently lose
 			// every transcript signal — no log line, just missing time.
 			sessionID := e.Name()[:len(e.Name())-len(".jsonl")]
-			spaceID := p.transcriptSpace(ctx, sessionID, &pids)
+			spaceID := p.transcriptSpace(ctx, sessionID, root.Sessions, &pids)
 			if !cwdMatchesAnyPattern(cwd, snap.CwdPatterns) && !(spaceID != "" && snap.BoundSpaceIDs[spaceID]) {
 				continue
 			}
@@ -154,13 +178,6 @@ func (p *Pipeline) collectTranscriptSignals(ctx context.Context, snap *CacheSnap
 				WindowTitle: sessionID,
 				SpaceID:     spaceID,
 			})
-		}
-	}
-	// Prune state for files that no longer exist.
-	for path := range p.transcriptState {
-		if !live[path] {
-			delete(p.transcriptState, path)
-			delete(p.sessionPane, strings.TrimSuffix(filepath.Base(path), ".jsonl"))
 		}
 	}
 	return out
@@ -174,18 +191,19 @@ func (p *Pipeline) collectTranscriptSignals(ctx context.Context, snap *CacheSnap
 // so on 2026-09-23 ten reviews spawned from the DED space fell through to the
 // generic /daas/ cwd rule. Such a process still inherits HERDR_PANE_ID, and
 // Claude Code's sessions/<pid>.json names its pid, so read the pane from the
-// process itself. *pids is filled from that registry on first need.
-func (p *Pipeline) transcriptSpace(ctx context.Context, sessionID string, pids *map[string]int) string {
+// process itself. sessionsDir is the registry of the config dir the
+// transcript lives in; *pids is filled from it on first need.
+func (p *Pipeline) transcriptSpace(ctx context.Context, sessionID, sessionsDir string, pids *map[string]int) string {
 	if s, ok := p.herdr.SpaceForSession(sessionID); ok {
 		return s.ID
 	}
 	paneID, known := p.sessionPane[sessionID]
 	if !known {
-		if p.bridge == nil || p.cfg.ClaudeSessionsDir == "" {
+		if p.bridge == nil || sessionsDir == "" {
 			return ""
 		}
 		if *pids == nil {
-			*pids = claudeSessionPIDs(p.cfg.ClaudeSessionsDir)
+			*pids = claudeSessionPIDs(sessionsDir)
 		}
 		pid, ok := (*pids)[sessionID]
 		if !ok {

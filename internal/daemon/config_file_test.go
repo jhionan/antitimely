@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -11,7 +12,7 @@ func TestLoadFileConfig_Missing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing should be silent: %v", err)
 	}
-	if (fc != FileConfig{}) {
+	if !reflect.DeepEqual(fc, FileConfig{}) {
 		t.Errorf("expected zero-value, got %+v", fc)
 	}
 }
@@ -126,8 +127,8 @@ func TestParseConfig_TranscriptDefaultsAndOverrides(t *testing.T) {
 	if def.TranscriptGraceSec != 600 {
 		t.Fatalf("grace default = %d, want 600", def.TranscriptGraceSec)
 	}
-	if def.TranscriptRoot == "" {
-		t.Fatal("transcript root should default to a path")
+	if len(def.TranscriptRoots) == 0 {
+		t.Fatal("transcript roots should default to the discovered Claude config dirs")
 	}
 
 	// Overrides.
@@ -139,7 +140,7 @@ func TestParseConfig_TranscriptDefaultsAndOverrides(t *testing.T) {
 	if cfg.TranscriptGraceSec != 300 {
 		t.Fatalf("grace = %d, want 300", cfg.TranscriptGraceSec)
 	}
-	if cfg.TranscriptRoot != "/tmp/x" {
-		t.Fatalf("root = %q, want /tmp/x", cfg.TranscriptRoot)
+	if len(cfg.TranscriptRoots) != 1 || cfg.TranscriptRoots[0] != "/tmp/x" {
+		t.Fatalf("roots = %v, want [/tmp/x]", cfg.TranscriptRoots)
 	}
 }

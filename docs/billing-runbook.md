@@ -119,7 +119,7 @@ Inspect all authors first, then describe only Rian's work. Commits span `jhionan
 
 **Source B - coding sessions, tests and execution evidence.**
 
-- Claude Code: `~/.claude/projects/*/*.jsonl`, including relevant worker evidence. Read substantive user/assistant messages and tool outcomes, not merely a file's newest timestamp.
+- Claude Code: every config dir's `~/.claude*/projects/*/*.jsonl` (`~/.claude`, `~/.claude-work`, `~/.claude-j`; T3 also launches threads under `~/.claude-work`), including relevant worker evidence. Read substantive user/assistant messages and tool outcomes, not merely a file's newest timestamp.
 - Codex: `~/.codex/sessions/` and `~/.codex/archived_sessions/`. Inspect the actual schema: messages can be `response_item` payloads with `role=user/assistant`, and final responses can use `phase=final_answer`. Looking only for `event_msg/user_message` or `phase=final` can silently miss real work. Include worker sessions without counting copied history or elapsed parent/child time twice.
 - Opencode: its configured local session store, opened read-only. Check availability/schema before extraction. Missing historical sessions are an evidence gap, not proof that no work occurred.
 - Saved test reports, browser screenshots and execution logs: distinguish completed assertions, partial work, skipped checks and tool failures. Describe designs as designed, tests as tested, and implementations as implemented.

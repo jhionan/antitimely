@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -14,18 +15,19 @@ import (
 // FileConfig is the YAML config file shape. All fields are optional; empty/zero
 // means "use whatever was already in Config".
 type FileConfig struct {
-	Interval              string `yaml:"interval,omitempty"`
-	IdleThreshold         string `yaml:"idle_threshold,omitempty"`
-	AgentCPUThreshold     uint64 `yaml:"agent_cpu_threshold,omitempty"`
-	AgentCPUThresholdIdle uint64 `yaml:"agent_cpu_threshold_idle,omitempty"`
-	AgentBusyRiseTicks    int    `yaml:"agent_busy_rise_ticks,omitempty"`
-	AgentBusyFallTicks    int    `yaml:"agent_busy_fall_ticks,omitempty"`
-	SocketPath            string `yaml:"socket_path,omitempty"`
-	DBPath                string `yaml:"db_path,omitempty"`
-	PIDPath               string `yaml:"pid_path,omitempty"`
-	TranscriptTracking    *bool  `yaml:"transcript_tracking,omitempty"`
-	TranscriptGrace       string `yaml:"transcript_grace,omitempty"`
-	TranscriptRoot        string `yaml:"transcript_root,omitempty"`
+	Interval              string   `yaml:"interval,omitempty"`
+	IdleThreshold         string   `yaml:"idle_threshold,omitempty"`
+	AgentCPUThreshold     uint64   `yaml:"agent_cpu_threshold,omitempty"`
+	AgentCPUThresholdIdle uint64   `yaml:"agent_cpu_threshold_idle,omitempty"`
+	AgentBusyRiseTicks    int      `yaml:"agent_busy_rise_ticks,omitempty"`
+	AgentBusyFallTicks    int      `yaml:"agent_busy_fall_ticks,omitempty"`
+	SocketPath            string   `yaml:"socket_path,omitempty"`
+	DBPath                string   `yaml:"db_path,omitempty"`
+	PIDPath               string   `yaml:"pid_path,omitempty"`
+	TranscriptTracking    *bool    `yaml:"transcript_tracking,omitempty"`
+	TranscriptGrace       string   `yaml:"transcript_grace,omitempty"`
+	TranscriptRoot        string   `yaml:"transcript_root,omitempty"`
+	TranscriptRoots       []string `yaml:"transcript_roots,omitempty"`
 	// OpencodeDB overrides opencode's database path; "off" disables the
 	// opencode transcript source.
 	OpencodeDB string `yaml:"opencode_db,omitempty"`
@@ -130,12 +132,24 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 		}
 		cfg.TranscriptGraceSec = int(d.Seconds())
 	}
+	// Either key replaces the discovered roots; the list wins if both are set.
 	if fc.TranscriptRoot != "" {
 		p, err := expandHome(fc.TranscriptRoot)
 		if err != nil {
 			return fmt.Errorf("transcript_root: %w", err)
 		}
-		cfg.TranscriptRoot = p
+		cfg.TranscriptRoots = []string{p}
+	}
+	if len(fc.TranscriptRoots) > 0 {
+		roots := make([]string, 0, len(fc.TranscriptRoots))
+		for _, r := range fc.TranscriptRoots {
+			p, err := expandHome(r)
+			if err != nil {
+				return fmt.Errorf("transcript_roots: %w", err)
+			}
+			roots = append(roots, p)
+		}
+		cfg.TranscriptRoots = roots
 	}
 	switch fc.OpencodeDB {
 	case "":
@@ -162,17 +176,45 @@ func (fc FileConfig) ApplyTo(cfg *Config) error {
 	return nil
 }
 
-// defaultTranscriptRoot is $CLAUDE_CONFIG_DIR/projects when set, else
-// ~/.claude/projects.
-func defaultTranscriptRoot() string {
-	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
-		return filepath.Join(d, "projects")
-	}
+// defaultTranscriptRoots discovers every Claude Code config dir's projects/.
+func defaultTranscriptRoots() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return nil
 	}
-	return filepath.Join(home, ".claude", "projects")
+	return discoverTranscriptRoots(home, os.Getenv("CLAUDE_CONFIG_DIR"))
+}
+
+// discoverTranscriptRoots returns $CLAUDE_CONFIG_DIR/projects (when set) then
+// ~/.claude/projects and every ~/.claude-*/projects, keeping only dirs that
+// exist. Rian runs several config dirs at once (claude, claude-work,
+// claude-j, each a CLAUDE_CONFIG_DIR alias); reading only ~/.claude left the
+// others billed solely by CPU, losing their model-wait time. Discovery runs at
+// daemon start, so a new config dir needs `atl restart`.
+func discoverTranscriptRoots(home, configDir string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(dir string) {
+		p := filepath.Join(dir, "projects")
+		if seen[p] {
+			return
+		}
+		if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	if configDir != "" {
+		add(filepath.Clean(configDir))
+	}
+	add(filepath.Join(home, ".claude"))
+	matches, _ := filepath.Glob(filepath.Join(home, ".claude-*"))
+	sort.Strings(matches)
+	for _, m := range matches {
+		add(m)
+	}
+	return out
 }
 
 // expandHome resolves a leading "~" to the current user's home directory.
@@ -232,7 +274,7 @@ agent_busy_fall_ticks: 3
 # activity overrides pause; counting continues until <grace> after the last turn.
 # transcript_tracking: true
 # transcript_grace: 10m          # a session counts this long after its last turn
-# transcript_root: ~/.claude/projects
+# transcript_roots: [~/.claude/projects, ~/.claude-work/projects]  # default: ~/.claude*/projects
 # opencode_db: ~/.local/share/opencode/opencode.db   # "off" disables opencode session tracking
 # codex_root: ~/.codex/sessions                       # "off" disables Codex session tracking
 `

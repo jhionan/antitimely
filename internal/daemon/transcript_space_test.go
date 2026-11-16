@@ -45,9 +45,8 @@ func newUnboundSessionPipeline(t *testing.T) (*Pipeline, *osbridge.FakeBridge, s
 	br := &osbridge.FakeBridge{}
 	p := NewPipeline(nil, br, cache, PipelineConfig{
 		TranscriptTracking: true,
-		TranscriptRoot:     root,
+		ClaudeRoots:        []ClaudeRoot{{Projects: root, Sessions: sessionsDir}},
 		TranscriptGraceSec: 600,
-		ClaudeSessionsDir:  sessionsDir,
 	})
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
 	return p, br, sessionsDir
@@ -74,6 +73,7 @@ func TestCollectTranscript_UnboundSessionInheritsProcessPaneSpace(t *testing.T) 
 		t.Fatalf("SpaceID = %q, want %q (inherited from the session process's pane)", sigs[0].SpaceID, "wN")
 	}
 }
+
 // TestCollectTranscript_GUISessionResolvesViaHerdrCore: a Claude session in a
 // Herdr GUI pane is named nowhere in the TUI's session.json; its process
 // carries HC_TERMINAL_ID, resolved through herdr-core's terminals.json.
@@ -88,7 +88,6 @@ func TestCollectTranscript_GUISessionResolvesViaHerdrCore(t *testing.T) {
 		t.Fatalf("want 1 signal in GUI space spAAA, got %+v", sigs)
 	}
 }
-
 
 // TestCollectTranscript_PaneBindingOutlivesSessionProcess: Claude Code deletes
 // sessions/<pid>.json when the process exits, but its transcript keeps billing
@@ -163,7 +162,7 @@ func TestCollectTranscript_HerdrBoundSessionSkipsProbe(t *testing.T) {
 	cache.Store(&CacheSnapshot{CwdPatterns: []string{"/work/daas"}})
 	br := &osbridge.FakeBridge{EnvByPID: map[int]map[string]string{4242: {"HERDR_PANE_ID": "wM:p1"}}}
 	p := NewPipeline(nil, br, cache, PipelineConfig{
-		TranscriptTracking: true, TranscriptRoot: root, TranscriptGraceSec: 600, ClaudeSessionsDir: sessionsDir,
+		TranscriptTracking: true, ClaudeRoots: []ClaudeRoot{{Projects: root, Sessions: sessionsDir}}, TranscriptGraceSec: 600,
 	})
 	p.herdr = herdr.NewResolver("../herdr/testdata/session.json")
 

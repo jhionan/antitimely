@@ -157,13 +157,13 @@ func TestCollectCodex_CommandCwdSticksAcrossTurns(t *testing.T) {
 }
 
 // The Claude collector prunes its per-file state for files it did not see.
-// Codex files are not under TranscriptRoot, so they must not share that map.
+// Codex files are not under ClaudeRoots, so they must not share that map.
 func TestCollectCodex_StateSurvivesClaudeCollector(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now()
 	writeCodexSession(t, root, now, codexSID, codexLine(now.Add(-30*time.Second), "session_meta", `{"cwd":"/work/daas"}`))
 	p := newCodexPipeline(t, root, 600, []string{"/work/daas"})
-	p.cfg.TranscriptRoot = t.TempDir()
+	p.cfg.ClaudeRoots = []ClaudeRoot{{Projects: t.TempDir()}}
 
 	p.collectCodexSignals(context.Background(), p.cache.Snapshot(), now.Unix())
 	p.collectTranscriptSignals(context.Background(), p.cache.Snapshot(), now.Unix())

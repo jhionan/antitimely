@@ -57,7 +57,7 @@ func TestRunTick_TranscriptCountsWhileIdleAndZeroCPU(t *testing.T) {
 		CPUDeltaThresh:     5,
 		CPUDeltaThreshIdle: 5,
 		TranscriptTracking: true,
-		TranscriptRoot:     root,
+		ClaudeRoots:        []ClaudeRoot{{Projects: root}},
 		TranscriptGraceSec: 600,
 	})
 	defer db.Close()
@@ -81,7 +81,7 @@ func TestRunTick_TranscriptResumesPausedProject(t *testing.T) {
 		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n")
 	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
 		IdleThresholdSec: 120, CPUDeltaThresh: 5, CPUDeltaThreshIdle: 5,
-		TranscriptTracking: true, TranscriptRoot: root, TranscriptGraceSec: 600,
+		TranscriptTracking: true, ClaudeRoots: []ClaudeRoot{{Projects: root}}, TranscriptGraceSec: 600,
 	})
 	defer db.Close()
 	pid := seedProjectWithCwdRule(t, db, cache, "Daas", "/work/daas")
@@ -117,7 +117,7 @@ func TestRunTick_TranscriptDedupTwoSessions(t *testing.T) {
 		`{"cwd":"/work/daas","timestamp":"2026-06-24T02:30:29Z"}`+"\n")
 	p, br, cache, db := newTestPipelineWithCfg(t, PipelineConfig{
 		IdleThresholdSec: 120, CPUDeltaThresh: 5, CPUDeltaThreshIdle: 5,
-		TranscriptTracking: true, TranscriptRoot: root, TranscriptGraceSec: 600,
+		TranscriptTracking: true, ClaudeRoots: []ClaudeRoot{{Projects: root}}, TranscriptGraceSec: 600,
 	})
 	defer db.Close()
 	pid := seedProjectWithCwdRule(t, db, cache, "Daas", "/work/daas")

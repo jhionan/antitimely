@@ -39,7 +39,7 @@ func TestPipelineConfigCarriesTheTrackingSettings(t *testing.T) {
 		AgentBusyFallTicks: 3,
 		TranscriptTracking: true,
 		TranscriptGraceSec: 600,
-		TranscriptRoot:     "/tmp/projects",
+		TranscriptRoots:    []string{"/tmp/projects"},
 	})
 	switch {
 	case pc.IdleThresholdSec != 120:
@@ -56,8 +56,8 @@ func TestPipelineConfigCarriesTheTrackingSettings(t *testing.T) {
 		t.Error("TranscriptTracking = false, want true")
 	case pc.TranscriptGraceSec != 600:
 		t.Errorf("TranscriptGraceSec = %d, want 600", pc.TranscriptGraceSec)
-	case pc.TranscriptRoot != "/tmp/projects":
-		t.Errorf("TranscriptRoot = %q, want /tmp/projects", pc.TranscriptRoot)
+	case len(pc.ClaudeRoots) != 1 || pc.ClaudeRoots[0].Projects != "/tmp/projects":
+		t.Errorf("ClaudeRoots = %+v, want /tmp/projects", pc.ClaudeRoots)
 	}
 }
 

@@ -97,7 +97,7 @@ On every tick the daemon gathers up to three kinds of **observation**, each a fi
 |---|---|---|
 | **focus** | The frontmost app, via AppleScript against *System Events* (`osascript`) — its bundle id, name, and focused window title. Collected only while you're at the keyboard. | bundle id + window title (no cwd) |
 | **agent** | `ps -A` lists every process with its cumulative CPU time. The daemon diffs each PID's CPU against the previous poll; processes burning sustained CPU (the "busy bar", with rise/fall hysteresis — see [What counts as "active"](#what-counts-as-active)) qualify. For each, the working directory is read with `lsof -p <pid> -d cwd`. | binary name + cwd |
-| **transcript** | Reads coding-agent session logs: tails Claude Code's `~/.claude/projects/<dir>/*.jsonl` and Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, and queries opencode's `~/.local/share/opencode/opencode.db` read-only. Takes the `cwd` and last-activity time from the log itself. Needs no CPU, no focus, not even a local process. | cwd + session id |
+| **transcript** | Reads coding-agent session logs: tails Claude Code's `~/.claude*/projects/<dir>/*.jsonl` (every config dir, e.g. `~/.claude-work` used via `CLAUDE_CONFIG_DIR`; discovered at daemon start) and Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, and queries opencode's `~/.local/share/opencode/opencode.db` read-only. Takes the `cwd` and last-activity time from the log itself. Needs no CPU, no focus, not even a local process. | cwd + session id |
 
 The agent signal is what captures **parallel work**: `ps` sees three `claude` processes in three directories at once, and each becomes its own observation.
 
@@ -194,7 +194,7 @@ Configure via:
 ```yaml
 transcript_tracking: true         # enable transcript watching
 transcript_grace: 10m             # session counts this long after last turn
-transcript_root: ~/.claude/projects
+# transcript_roots: [~/.claude/projects, ~/.claude-work/projects]  # default: every ~/.claude*/projects
 opencode_db: ~/.local/share/opencode/opencode.db   # "off" disables opencode
 codex_root: ~/.codex/sessions                       # "off" disables Codex
 ```

@@ -37,17 +37,14 @@ type PipelineConfig struct {
 	AgentBusyFallTicks int
 	// TranscriptTracking enables the Claude Code transcript signal source.
 	TranscriptTracking bool
-	// TranscriptRoot is the dir holding per-cwd session subdirs
-	// (~/.claude/projects). Empty ⇒ transcript tracking is inert.
-	TranscriptRoot string
+	// ClaudeRoots lists every Claude Code config dir to read: each one's
+	// projects/ transcripts and sessions/ pid registry. Empty ⇒ Claude
+	// transcript tracking is inert.
+	ClaudeRoots []ClaudeRoot
 	// TranscriptGraceSec: a session counts as actively worked for this many
 	// seconds after its newest turn, stitching gaps between turns into one
 	// continuous billable block.
 	TranscriptGraceSec int
-	// ClaudeSessionsDir is Claude Code's per-process session registry
-	// (~/.claude/sessions/<pid>.json), used to find the process behind a
-	// transcript herdr doesn't know. Empty ⇒ that fallback is off.
-	ClaudeSessionsDir string
 	// OpencodeDB is opencode's SQLite store (~/.local/share/opencode/opencode.db).
 	// Empty (or TranscriptTracking off) ⇒ opencode sessions are seen only
 	// through the CPU-based agent signal.
@@ -755,10 +752,10 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 				// "don't cache an empty cwd" precedent just below.
 				log.Printf("env pid=%d: %v", proc.PID, err)
 			} else {
-				v := herdr.PaneFromEnv(env)
 				// A successful probe finding no variable is a real answer
 				// (the process is not under herdr) and is cached, so
 				// non-herdr processes aren't re-probed every tick.
+				v := herdr.PaneFromEnv(env)
 				paneID, paneKnown = v, true
 				p.procPane[proc.PID] = v
 			}

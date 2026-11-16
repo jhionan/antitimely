@@ -15,7 +15,22 @@ import (
 	"github.com/rian/antitimely/internal/store"
 )
 
-func importTranscripts(db *sql.DB, q *store.Queries, snap *CacheSnapshot, root string, fromUnix, toUnix int64, graceSec, intervalSec int) (int, error) {
+// importTranscripts replays every Claude config dir's transcripts in roots.
+// The per-project overlap check below also keeps two roots from double-laying
+// the same span.
+func importTranscripts(db *sql.DB, q *store.Queries, snap *CacheSnapshot, roots []string, fromUnix, toUnix int64, graceSec, intervalSec int) (int, error) {
+	inserted := 0
+	for _, root := range roots {
+		n, err := importTranscriptRoot(db, q, snap, root, fromUnix, toUnix, graceSec, intervalSec)
+		inserted += n
+		if err != nil {
+			return inserted, err
+		}
+	}
+	return inserted, nil
+}
+
+func importTranscriptRoot(db *sql.DB, q *store.Queries, snap *CacheSnapshot, root string, fromUnix, toUnix int64, graceSec, intervalSec int) (int, error) {
 	ctx := context.Background()
 	projDirs, err := os.ReadDir(root)
 	if err != nil {
