@@ -61,7 +61,16 @@ func matchOne(sig Signal, r RuleSpec) bool {
 // matches build directories nested inside it. A pattern without '*' keeps the
 // original literal-prefix rule: equal, or a true subdirectory.
 func MatchesCwd(pattern, cwd string) bool {
-	p := strings.TrimRight(pattern, "/")
+	p, isWindows := windowsCwd(pattern)
+	if isWindows {
+		cwd, _ = windowsCwd(cwd)
+		p = strings.TrimRight(p, "/")
+		if prefix, glob := strings.CutSuffix(p, "*"); glob {
+			return strings.HasPrefix(cwd, prefix)
+		}
+		return cwd == p || strings.HasPrefix(cwd, p+"/")
+	}
+	p = strings.TrimRight(p, "/")
 	if p == "" {
 		return false
 	}
@@ -101,11 +110,15 @@ func MatchesCwd(pattern, cwd string) bool {
 // agree. With the star anywhere else they diverge, which means a rule would
 // bill one set of ticks going forward and a different set retroactively.
 func ValidateCwdPattern(pattern string) error {
-	p := strings.TrimRight(pattern, "/")
+	p, isWindows := windowsCwd(pattern)
+	if isWindows && strings.Count(pattern, "*") > 1 {
+		return fmt.Errorf("only one wildcard is allowed: %q", pattern)
+	}
+	p = strings.TrimRight(p, "/")
 	if p == "" {
 		return fmt.Errorf("cwd pattern is empty: %q", pattern)
 	}
-	if !strings.Contains(p, "/") {
+	if !isWindows && !strings.Contains(p, "/") {
 		return fmt.Errorf("cwd pattern must be a path containing '/': %q", pattern)
 	}
 	if i := strings.Index(p, "*"); i >= 0 && i != len(p)-1 {

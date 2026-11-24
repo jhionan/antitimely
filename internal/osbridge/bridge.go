@@ -14,7 +14,7 @@ import (
 // their own per-tool deadline on top of (not in place of) the caller's ctx.
 type Bridge interface {
 	Frontmost(ctx context.Context) (FrontmostInfo, error)
-	FocusedWindowTitle(ctx context.Context) (string, error)
+	FocusedWindowTitle(ctx context.Context, focused FrontmostInfo) (string, error)
 	IdleSeconds(ctx context.Context) (int, error)
 	ListProcesses(ctx context.Context) ([]ProcessSample, error)
 	ProcessCWD(ctx context.Context, pid int) (string, error)
@@ -28,12 +28,14 @@ type FrontmostInfo struct {
 	BundleID string
 	PID      int
 	Name     string
+	window   uintptr // Windows foreground window handle for consistent title capture
 }
 
 type ProcessSample struct {
 	PID      int
 	Name     string // executable basename, e.g. "claude"
 	CPUTicks uint64 // monotonic counter, units = centiseconds
+	Started  uint64 // opaque process creation time; zero if unavailable
 }
 
 // The errors below are part of the Bridge contract, so they live here rather
@@ -50,3 +52,6 @@ var ErrAccessibilityDenied = errors.New("macos: accessibility/automation permiss
 // failure: a hung osascript is usually a wedged System Events, and respawning
 // one every tick is how the daemon accumulated multi-GB orphans in production.
 var ErrOsascriptTimeout = errors.New("macos: osascript timed out")
+
+// ErrForegroundChanged means the window changed after the app was identified.
+var ErrForegroundChanged = errors.New("foreground window changed")

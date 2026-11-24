@@ -284,3 +284,27 @@ func TestAgentSpaceBoundSurvivesTransientEnvProbeFailure(t *testing.T) {
 		t.Fatalf("SpaceID = %q, want %q", sigs[0].SpaceID, "wN")
 	}
 }
+
+func TestAgentPIDReuseWithSameNameResetsBaseline(t *testing.T) {
+	p, br, _, db := newTestPipeline(t)
+	defer db.Close()
+	ctx := context.Background()
+	const cwd = "C:/agent"
+	snap := snapWithCwdPattern(cwd)
+	br.CWDByPID = map[int]string{212: cwd}
+	br.Processes = []osbridge.ProcessSample{{PID: 212, Name: "agent.exe", Started: 1}}
+	p.collectAgentSignals(ctx, snap, true)
+	br.Processes[0].CPUTicks = 250
+	if got := p.collectAgentSignals(ctx, snap, true); len(got) != 1 {
+		t.Fatalf("original process signal: %+v", got)
+	}
+	br.Processes[0].Started = 2
+	br.Processes[0].CPUTicks = 700
+	if got := p.collectAgentSignals(ctx, snap, true); len(got) != 0 {
+		t.Fatalf("reused PID accrued CPU from prior process: %+v", got)
+	}
+	br.Processes[0].CPUTicks = 900
+	if got := p.collectAgentSignals(ctx, snap, true); len(got) != 1 {
+		t.Fatalf("reused PID should have a new baseline: %+v", got)
+	}
+}

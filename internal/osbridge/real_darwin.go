@@ -27,15 +27,15 @@ func withTimeout(ctx context.Context, d time.Duration) (context.Context, context
 // package. The HID idle counter is cached for one second so the daemon's
 // hot poll path doesn't shell out to ioreg on every tick.
 type RealBridge struct {
-	idleMu   sync.Mutex
-	idleAt   time.Time
-	idleVal  int
+	idleMu  sync.Mutex
+	idleAt  time.Time
+	idleVal int
 }
 
 func (r *RealBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
 	return FrontmostReal(ctx)
 }
-func (r *RealBridge) FocusedWindowTitle(ctx context.Context) (string, error) {
+func (r *RealBridge) FocusedWindowTitle(ctx context.Context, _ FrontmostInfo) (string, error) {
 	return FocusedWindowTitleReal(ctx)
 }
 func (r *RealBridge) IdleSeconds(ctx context.Context) (int, error) {

@@ -98,17 +98,22 @@ func parseCodexTail(data []byte, root string) (t codexTail, ok bool) {
 	return t, ok
 }
 
-// decodeFileURL turns "file:///a/b%20c" into "/a/b c"; any other string is
-// returned unchanged.
+// decodeFileURL handles POSIX paths, drive letters and UNC authorities.
 func decodeFileURL(s string) string {
-	rest, found := strings.CutPrefix(s, "file://")
-	if !found {
+	if !strings.HasPrefix(s, "file://") {
 		return s
 	}
-	if d, err := url.PathUnescape(rest); err == nil {
-		return d
+	u, err := url.Parse(s)
+	if err != nil {
+		return s
 	}
-	return rest
+	if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+		return "//" + u.Host + u.Path
+	}
+	if len(u.Path) >= 4 && u.Path[0] == '/' && u.Path[2:4] == ":/" {
+		return u.Path[1:]
+	}
+	return u.Path
 }
 
 // codexSessionID is the trailing uuid of rollout-<local time>-<uuid>.jsonl.
@@ -199,6 +204,7 @@ func (p *Pipeline) collectCodexSignals(ctx context.Context, snap *CacheSnapshot,
 			if cwd == "" {
 				cwd = st.cwd
 			}
+			cwd = domain.TranscriptCwd(cwd, path)
 			if cwd == "" || !cwdMatchesAnyPattern(cwd, snap.CwdPatterns) {
 				continue
 			}

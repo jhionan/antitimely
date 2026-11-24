@@ -1,0 +1,57 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Antitimely" Manufacturer="Antitimely" Version="$(var.Version)"
+           UpgradeCode="2070D70F-72F8-42FB-9C4F-19B87B04149C" Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Antitimely is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="Antitimely.ico" SourceFile="$(var.BinDir)\antitimely.ico" />
+    <Property Id="ARPPRODUCTICON" Value="Antitimely.ico" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLDIR" Name="Antitimely">
+        <Component Id="Tracker" Guid="*">
+          <File Id="AntitimelyCli" Source="$(var.BinDir)\antitimely.exe" KeyPath="yes" />
+          <Environment Id="AntitimelyPath" Name="PATH" Value="[INSTALLDIR]" Action="set" Part="last" System="no" />
+        </Component>
+        <Component Id="Daemon" Guid="*">
+          <File Id="AntitimelyDaemon" Source="$(var.BinDir)\antitimely-daemon.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="TaskSetup" Guid="*">
+          <File Id="TaskSetupScript" Source="$(var.BinDir)\windows-startup.ps1" KeyPath="yes" />
+        </Component>
+        <Component Id="Tray" Guid="*">
+          <File Id="TrayScript" Source="$(var.BinDir)\windows-tray.ps1" KeyPath="yes" />
+        </Component>
+        <Component Id="TrayBranding" Guid="*">
+          <File Id="TrayIcon" Source="$(var.BinDir)\antitimely.ico" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="TrackerPrograms" Name="Antitimely">
+        <Component Id="StartupShortcut" Guid="*">
+          <Shortcut Id="EnableTracking" Name="Enable Antitimely tracking"
+            Target="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
+            Arguments='-NoProfile -ExecutionPolicy Bypass -File "[#TaskSetupScript]" -Action Install -BinaryPath "[#AntitimelyDaemon]"' />
+          <Shortcut Id="StartTray" Name="Antitimely tray" Icon="Antitimely.ico"
+            Target="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
+            Arguments='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File "[#TrayScript]" -BinaryPath "[#AntitimelyCli]" -ShowOnLaunch' />
+          <RemoveFolder Id="RemoveTrackerPrograms" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\Antitimely" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <CustomAction Id="RemoveTrackingTask" Directory="INSTALLDIR" Execute="deferred"
+      Impersonate="yes" Return="check"
+      ExeCommand='&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[#TaskSetupScript]&quot; -Action Uninstall' />
+    <InstallExecuteSequence>
+      <Custom Action="RemoveTrackingTask" Before="RemoveFiles" Condition='REMOVE~="ALL"' />
+    </InstallExecuteSequence>
+    <Feature Id="Antitimely" Title="Antitimely" Level="1">
+      <ComponentRef Id="Tracker" />
+      <ComponentRef Id="Daemon" />
+      <ComponentRef Id="TaskSetup" />
+      <ComponentRef Id="Tray" />
+      <ComponentRef Id="TrayBranding" />
+      <ComponentRef Id="StartupShortcut" />
+    </Feature>
+  </Package>
+</Wix>

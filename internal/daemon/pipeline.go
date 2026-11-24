@@ -154,7 +154,7 @@ type Pipeline struct {
 	bridge     osbridge.Bridge
 	cache      *Cache
 	cfg        PipelineConfig
-	prevCPU    map[int]uint64
+	prevCPU    map[int]osbridge.ProcessSample
 	// procClass caches each PID's classification (track-or-ignore) so we
 	// don't re-lsof and re-evaluate rules every tick. Invalidated when the
 	// cache snapshot pointer changes (rule/watch mutation) or when PID
@@ -257,7 +257,7 @@ const (
 func NewPipeline(q *store.Queries, b osbridge.Bridge, cache *Cache, cfg PipelineConfig) *Pipeline {
 	return &Pipeline{
 		q: q, bridge: b, cache: cache, cfg: cfg,
-		prevCPU:          map[int]uint64{},
+		prevCPU:          map[int]osbridge.ProcessSample{},
 		procClass:        map[int]procClass{},
 		procActivity:     map[int]activityState{},
 		herdr:            herdr.NewResolver(""),
@@ -583,7 +583,7 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 		}
 		return domain.Signal{}, false
 	}
-	if !snap.AllowedBundles[fm.BundleID] {
+	if fm.BundleID == "" || !snap.AllowedBundles[fm.BundleID] {
 		return domain.Signal{}, false
 	}
 
@@ -595,7 +595,7 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 	// still match in the meantime.
 	title := ""
 	if now >= p.titleRetryAt {
-		t, terr := p.bridge.FocusedWindowTitle(ctx)
+		t, terr := p.bridge.FocusedWindowTitle(ctx, fm)
 		switch {
 		case terr == nil:
 			title = t
@@ -605,6 +605,8 @@ func (p *Pipeline) collectFocusSignal(ctx context.Context, snap *CacheSnapshot, 
 			if p.perm != nil {
 				p.perm.Set("ok", now)
 			}
+		case errors.Is(terr, osbridge.ErrForegroundChanged):
+			return domain.Signal{}, false
 		case errors.Is(terr, osbridge.ErrAccessibilityDenied):
 			if p.perm != nil {
 				p.perm.Set("accessibility_denied", now)
@@ -683,30 +685,24 @@ func (p *Pipeline) collectAgentSignals(ctx context.Context, snap *CacheSnapshot,
 		// reached via the cwd-rule path (not pre-registered as binaries) still
 		// have a delta to measure on their second tick.
 		prev, seen := p.prevCPU[proc.PID]
-		p.prevCPU[proc.PID] = proc.CPUTicks
+		p.prevCPU[proc.PID] = proc
 		if !seen {
 			continue
 		}
 
-		// PID reuse via binary-name change: definitively a different process,
-		// drop the cached classification before any further check.
-		if cached, ok := p.procClass[proc.PID]; ok && cached.name != proc.Name {
+		// A reused PID can have the same name and already have accrued CPU.
+		// Where available, the creation time distinguishes the two processes.
+		resetBaseline := prev.Started != proc.Started || proc.CPUTicks < prev.CPUTicks
+		if prev.Name != proc.Name || resetBaseline {
 			delete(p.procClass, proc.PID)
 			delete(p.procActivity, proc.PID)
 			delete(p.procPane, proc.PID)
 		}
-
-		// CPU counters are monotonic within a process; a regression means
-		// either PID reuse or a counter glitch. Drop the cache and skip the
-		// tick — the next tick will reclassify against the new process.
-		if proc.CPUTicks < prev {
-			delete(p.procClass, proc.PID)
-			delete(p.procActivity, proc.PID)
-			delete(p.procPane, proc.PID)
+		if resetBaseline {
 			continue
 		}
 
-		delta := proc.CPUTicks - prev
+		delta := proc.CPUTicks - prev.CPUTicks
 		rise := max(p.cfg.AgentBusyRiseTicks, 1)
 		fall := max(p.cfg.AgentBusyFallTicks, 1)
 		st := p.procActivity[proc.PID]

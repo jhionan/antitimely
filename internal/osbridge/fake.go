@@ -59,7 +59,7 @@ func (f *FakeBridge) Frontmost(ctx context.Context) (FrontmostInfo, error) {
 	f.FrontmostCalls++
 	return f.FrontmostInfoVal, f.FrontmostErr
 }
-func (f *FakeBridge) FocusedWindowTitle(ctx context.Context) (string, error) {
+func (f *FakeBridge) FocusedWindowTitle(ctx context.Context, _ FrontmostInfo) (string, error) {
 	f.FocusedTitleCalls++
 	return f.FocusedTitle, f.FocusedTitleErr
 }

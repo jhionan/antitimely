@@ -49,11 +49,19 @@ func newOpencodePipeline(t *testing.T, dbPath string, graceSec int, prefixes []s
 	t.Helper()
 	cache := NewCache()
 	cache.Store(&CacheSnapshot{CwdPatterns: prefixes})
-	return NewPipeline(nil, nil, cache, PipelineConfig{
+	p := NewPipeline(nil, nil, cache, PipelineConfig{
 		TranscriptTracking: true,
 		TranscriptGraceSec: graceSec,
 		OpencodeDB:         dbPath,
 	})
+	t.Cleanup(func() {
+		if p.opencodeDB != nil {
+			if err := p.opencodeDB.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	return p
 }
 
 func TestCollectOpencode_EmitsWithinGrace(t *testing.T) {

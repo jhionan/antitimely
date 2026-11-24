@@ -141,10 +141,14 @@ func TestParseConfig_TranscriptRoots(t *testing.T) {
 }
 
 func TestPipelineConfigDerivesSessionsPerRoot(t *testing.T) {
-	got := pipelineConfigFor(Config{TranscriptRoots: []string{"/u/.claude/projects", "/u/.claude-work/projects"}}).ClaudeRoots
+	homeDir := t.TempDir()
+	claude := filepath.Join(homeDir, ".claude")
+	claudeWork := filepath.Join(homeDir, ".claude-work")
+	roots := []string{filepath.Join(claude, "projects"), filepath.Join(claudeWork, "projects")}
+	got := pipelineConfigFor(Config{TranscriptRoots: roots}).ClaudeRoots
 	want := []ClaudeRoot{
-		{Projects: "/u/.claude/projects", Sessions: "/u/.claude/sessions"},
-		{Projects: "/u/.claude-work/projects", Sessions: "/u/.claude-work/sessions"},
+		{Projects: roots[0], Sessions: filepath.Join(claude, "sessions")},
+		{Projects: roots[1], Sessions: filepath.Join(claudeWork, "sessions")},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ClaudeRoots = %+v, want %+v", got, want)

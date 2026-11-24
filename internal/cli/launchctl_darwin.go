@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -173,3 +174,13 @@ func runLaunchctl(args ...string) error {
 	}
 	return nil
 }
+
+func printStopDaemonHint(w io.Writer, pidPath string) {
+	fmt.Fprintln(w, "  antitimely uninstall-launch-agent     # if managed by launchd")
+	fmt.Fprintf(w, "  kill -TERM $(cat %s)  # if running standalone\n", pidPath)
+}
+
+const startupUsage = `  antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
+  antitimely uninstall-launch-agent   remove launch agent and stop background daemon
+  antitimely restart                  restart the background daemon (launchctl kickstart -k)
+  antitimely grant-accessibility      open the macOS Accessibility pane to grant window-title capture`

@@ -18,6 +18,12 @@ func Dispatch(args []string) int {
 	case "help", "--help", "-h":
 		printUsage(os.Stdout)
 		return 0
+	case "clickup":
+		return cmdClickUp(args[1:])
+	case "timer":
+		return cmdTimer(args[1:])
+	case "sync":
+		return cmdSync(args[1:])
 	case "status":
 		return cmdStatus(args[1:])
 	case "watch":
@@ -71,6 +77,9 @@ func printUsage(w *os.File) {
 Usage:
   antitimely daemon  [--interval=5s] [--idle-thresh=120s] [--agent-cpu-thresh=5]
   antitimely status
+  antitimely sync status             show the sync queue and last result
+  antitimely timer start ["session name"] | stop | status
+  antitimely clickup                 task timer and historical allocation RPC commands
   antitimely watch  add app|binary <id>  |  list  |  remove <id>
   antitimely company  add <name>  |  list  |  delete [--force] <name>
   antitimely invoice  generate <company> [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--issue-date=YYYY-MM-DD] [--note=...] [--discount=AMOUNT] [--no-credit] [--dry-run] [--allow-empty]
@@ -88,13 +97,10 @@ Usage:
   antitimely summary  [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--project=<name>] [--company=<name>] [--all-authors] [--md|--txt]
   antitimely reset    all  |  ticks   [--yes]
   antitimely config   init  |  show  |  path
-  antitimely install-launch-agent     install ~/Library/LaunchAgents/com.rian.antitimely.plist and start daemon at login
-  antitimely uninstall-launch-agent   remove launch agent and stop background daemon
-  antitimely restart                  restart the background daemon (launchctl kickstart -k)
-  antitimely grant-accessibility      open the macOS Accessibility pane to grant window-title capture
+`+startupUsage+`
   antitimely debug   windows  |  frontmost  |  idle
   antitimely help    show this message
 
 Run any subcommand with the daemon running ('antitimely daemon' in another terminal).
-State lives in ~/.antitimely/ (db.sqlite, antitimely.sock, antitimely.pid).`)
+State lives in ~/.antitimely/.`)
 }

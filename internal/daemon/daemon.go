@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,12 +19,16 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/rian/antitimely/internal/herdr"
+	"github.com/rian/antitimely/internal/localrpc"
 	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
+	"github.com/rian/antitimely/internal/syncclient"
+	"github.com/rian/antitimely/internal/tasktimer"
 )
 
 type Config struct {
+	Sync               syncclient.Config
 	IntervalSeconds    int
 	IdleThresholdSec   int
 	AgentCPUThresh     uint64
@@ -54,6 +57,10 @@ func DefaultConfig() (Config, error) {
 		return Config{}, err
 	}
 	dir := filepath.Join(home, ".antitimely")
+	socketPath, err := localrpc.DefaultPath(dir)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		IntervalSeconds:    5,
 		IdleThresholdSec:   120,
@@ -61,7 +68,7 @@ func DefaultConfig() (Config, error) {
 		AgentCPUThreshIdle: 100,
 		AgentBusyRiseTicks: 2,
 		AgentBusyFallTicks: 3,
-		SocketPath:         filepath.Join(dir, "antitimely.sock"),
+		SocketPath:         socketPath,
 		DBPath:             filepath.Join(dir, "db.sqlite"),
 		PIDPath:            filepath.Join(dir, "antitimely.pid"),
 		TranscriptTracking: true,
@@ -153,6 +160,23 @@ func Run(cfg Config, schemaSQL string) error {
 		return fmt.Errorf("mkdir state: %w", err)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(cfg.PIDPath), 0o700); err != nil {
+		return fmt.Errorf("mkdir pid directory: %w", err)
+	}
+	listener, err := localrpc.Listen(cfg.SocketPath, cfg.PIDPath)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.SocketPath, err)
+	}
+	defer listener.Close()
+	if err := writePIDFile(cfg.PIDPath); err != nil {
+		return err
+	}
+	defer func() {
+		if err := os.Remove(cfg.PIDPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "remove pid file:", err)
+		}
+	}()
+
 	db, q, err := openDB(cfg)
 	if err != nil {
 		return err
@@ -196,10 +220,30 @@ func Run(cfg Config, schemaSQL string) error {
 		return fmt.Errorf("migrate rules match_space_id: %w", err)
 	}
 
+	syncWorker, syncErr := syncclient.Configure(context.Background(), db, cfg.Sync, cfg.IntervalSeconds)
+	if syncErr != nil {
+		fmt.Fprintln(os.Stderr, "sync disabled:", syncErr)
+	}
+
+	tasks, taskErr := tasktimer.Open(context.Background(), db, cfg.IntervalSeconds)
+	if taskErr != nil {
+		fmt.Fprintln(os.Stderr, "task timer unavailable:", taskErr)
+	}
+	var clickUp *tasktimer.Remote
+	if syncWorker != nil && tasks != nil {
+		clickUp, taskErr = tasktimer.NewRemote(tasks, cfg.Sync)
+		if taskErr != nil {
+			fmt.Fprintln(os.Stderr, "ClickUp unavailable:", taskErr)
+		}
+	}
 	bridge := &osbridge.RealBridge{}
 	cache := NewCache()
 	pt := NewPermissionTracker()
 	svc := &AntitimelyService{
+		SyncWorker:          syncWorker,
+		Tasks:               tasks,
+		ClickUp:             clickUp,
+		SyncError:           syncErr,
 		DB:                  db,
 		Q:                   q,
 		Cache:               cache,
@@ -219,15 +263,6 @@ func Run(cfg Config, schemaSQL string) error {
 	pipeline.SetDBStats(db.Stats)
 	poller := NewPoller(pipeline, time.Duration(cfg.IntervalSeconds)*time.Second)
 
-	listener, err := acquireSocket(cfg.SocketPath, cfg.PIDPath)
-	if err != nil {
-		return err
-	}
-
-	if err := writePIDFile(cfg.PIDPath); err != nil {
-		return err
-	}
-
 	srv := rpc.NewServer()
 	if err := srv.RegisterName(rpcapi.ServiceName, svc); err != nil {
 		return err
@@ -235,6 +270,12 @@ func Run(cfg Config, schemaSQL string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+	if syncWorker != nil {
+		wg.Go(func() { syncWorker.Run(ctx) })
+	}
+	if clickUp != nil {
+		wg.Go(func() { clickUp.Run(ctx) })
+	}
 
 	wg.Add(1)
 	go func() {
@@ -284,10 +325,11 @@ func Run(cfg Config, schemaSQL string) error {
 		}
 	}()
 
-	fmt.Printf("antitimely daemon ready (socket=%s db=%s)\n", cfg.SocketPath, cfg.DBPath)
+	fmt.Printf("antitimely daemon ready (endpoint=%s db=%s)\n", cfg.SocketPath, cfg.DBPath)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 	for {
 		sig := <-sigCh
 		if sig == syscall.SIGHUP {
@@ -305,12 +347,6 @@ func Run(cfg Config, schemaSQL string) error {
 		fmt.Fprintln(os.Stderr, "listener close:", err)
 	}
 	wg.Wait()
-	if err := os.Remove(cfg.SocketPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintln(os.Stderr, "remove socket:", err)
-	}
-	if err := os.Remove(cfg.PIDPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintln(os.Stderr, "remove pid file:", err)
-	}
 	return nil
 }
 
@@ -325,56 +361,6 @@ func openDB(cfg Config) (*sql.DB, *store.Queries, error) {
 	// guarantees periodic SQLITE_BUSY under any concurrent RPC + poll load.
 	db.SetMaxOpenConns(1)
 	return db, store.New(db), nil
-}
-
-func acquireSocket(path, pidPath string) (net.Listener, error) {
-	if _, err := os.Stat(path); err == nil {
-		// Socket present. Try the PID file first — if it points to a live
-		// process, refuse to start. Only treat the socket as stale when we
-		// can prove nothing is listening (PID file missing/stale AND dial
-		// fails).
-		if running, pid := pidFileAlive(pidPath); running {
-			return nil, fmt.Errorf("another antitimely daemon is running (pid=%d, socket=%s)", pid, path)
-		}
-		c, err := net.DialTimeout("unix", path, 200*time.Millisecond)
-		if err == nil {
-			c.Close()
-			return nil, fmt.Errorf("another antitimely daemon is running on %s", path)
-		}
-		fmt.Fprintf(os.Stderr, "removing stale socket %s (pid file missing or dead)\n", path)
-		if err := os.Remove(path); err != nil {
-			return nil, fmt.Errorf("remove stale socket: %w", err)
-		}
-	}
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, fmt.Errorf("listen: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, err
-	}
-	return l, nil
-}
-
-// pidFileAlive returns whether the PID file at path points to a live process.
-func pidFileAlive(path string) (bool, int) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false, 0
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return false, 0
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false, 0
-	}
-	// Signal 0 doesn't deliver but returns an error if the process is gone.
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		return false, pid
-	}
-	return true, pid
 }
 
 func writePIDFile(path string) error {

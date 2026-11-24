@@ -1,17 +1,17 @@
 # antitimely
 
-> Automatic, project-aware time tracking for the agentic era — runs as a tiny macOS daemon, credits **parallel work**, and never asks you to start a timer.
+> Automatic, project-aware time tracking for the agentic era — runs as a small background daemon on macOS and Windows, credits **parallel work**, and never asks you to start a timer.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#install)
+[![Platforms: macOS and Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#install)
 [![Made with Go](https://img.shields.io/badge/Go-1.26-00ADD8.svg?logo=go&logoColor=white)](https://go.dev)
 [![No CGO](https://img.shields.io/badge/CGO-none-success.svg)](#layered-architecture)
 
-A macOS time tracker that observes an allowlisted set of programs (apps + binaries) and attributes work to projects via rule matching. It captures **parallel work** — three AI agents on three clients during one hour count as three billable hours.
+A local time tracker that observes an allowlisted set of programs (apps + binaries) and attributes work to projects via rule matching. It captures **parallel work** — three AI agents on three clients during one hour count as three billable hours.
 
 Built around the observation that modern software work is increasingly *agentic*: you launch a claude/opencode/aider session in one directory, switch to another window, run a build, take a call. antitimely tracks all of it automatically by matching processes' working directories to projects you defined.
 
-See `docs/superpowers/specs/2026-05-20-antitimely-design.md` for the full design.
+See [the original design](./docs/superpowers/specs/2026-05-20-antitimely-design.md) and [the roadmap](./tasks.md).
 
 ## Features
 
@@ -31,15 +31,17 @@ See `docs/superpowers/specs/2026-05-20-antitimely-design.md` for the full design
 | Language | **Go 1.26**, no cgo | One binary that is both the daemon and the CLI; builds without a C toolchain |
 | Storage | **SQLite** via [`modernc.org/sqlite`](https://gitlab.com/cznic/sqlite) (pure-Go transpile), WAL mode, one connection | A single file you can back up, query or hand-edit; no CGO |
 | Data access | [**sqlc**](https://sqlc.dev) generates `internal/store` from `schema.sql` + `queries.sql` | Type-checked SQL without an ORM |
-| IPC | stdlib **`net/rpc`** over a Unix-domain socket (`~/.antitimely/antitimely.sock`) | Zero dependencies; the CLI is a thin client of the running daemon |
+| IPC | stdlib **`net/rpc`** over a Unix-domain socket on macOS or a per-user named pipe on Windows | The CLI is a thin client of the running daemon |
 | CLI | stdlib **`flag`**, hand-rolled dispatch + interactive menu; `golang.org/x/sys/unix` for raw terminal mode | No framework; the command surface is small |
 | Config | YAML via [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) | `~/.antitimely/config.yaml`, all keys optional |
 | PDF | [`maroto/v2`](https://github.com/johnfercher/maroto) to render invoices, [`ledongthuc/pdf`](https://github.com/ledongthuc/pdf) to read them back in tests | |
-| OS integration | shells out to stock macOS tools: `osascript` (System Events), `ps`, `lsof`, `ioreg` | All behind `internal/osbridge`, with a fake bridge for tests |
-| Process supervision | **launchd** user agent (`com.rian.antitimely`), driven by `launchctl` | Starts at login, restarts on crash |
+| OS integration | Stock macOS tools (`osascript`, `ps`, `lsof`, `ioreg`) and Windows Win32 APIs | All behind `internal/osbridge`, with a fake bridge for tests |
+| Process supervision | **launchd** on macOS, **Task Scheduler** on Windows | Starts at login and can restart on failure |
 | Signing | `make build` re-signs with a stable Developer ID via `codesign` | macOS keeps the Accessibility grant across rebuilds |
 
 ## Install
+
+### macOS
 
 ```bash
 # 1. Build
@@ -59,6 +61,43 @@ On first run, macOS may prompt for **Automation** permission (allow it). For acc
 ```bash
 make rebuild
 ```
+
+### Windows
+
+Build the CLI and the console-free daemon from the same source in PowerShell.
+
+```powershell
+go build -o .\antitimely.exe .
+go build -ldflags="-H=windowsgui" -o .\antitimely-daemon.exe .
+```
+
+Run the daemon from the Windows account whose desktop you want to track. To switch from the foreground daemon to login startup, stop the foreground instance with Ctrl+C first.
+
+```powershell
+.\antitimely.exe daemon
+# Or install the background daemon and start it now:
+.\scripts\windows-startup.ps1 -Action Install
+```
+
+Keep the background binary at the path used for installation. State and `daemon.log` live under `%USERPROFILE%\.antitimely`. Manage the scheduled task with `-Action Status`, `Stop`, `Start`, or `Uninstall`. Use `antitimely.exe restart` to restart it.
+
+Add the app identifier shown as `bundle` by `debug frontmost` to the watchlist. The delay gives you time to switch from PowerShell to the app you want to identify. The example uses VS Code. Focus the watched app for at least one tick while active, then check the recorded time and unassigned observations.
+
+```powershell
+Start-Sleep -Seconds 3; .\antitimely.exe debug frontmost
+.\antitimely.exe watch add app code.exe
+.\antitimely.exe debug windows
+.\antitimely.exe status --once
+.\antitimely.exe review
+```
+
+Windows supports focus, idle, process CPU, and transcript tracking. Foreground tracking pauses when the session disconnects or a secure desktop is active. The startup task supervises the daemon and restarts it after an abnormal exit. A packaged app hosted by Application Frame Host can be watched by its `appx:<application-id>` identifier. Run `antitimely debug frontmost` to see the identifier. A protected process can be unavailable to the process and working-directory probes.
+
+Run `antitimely status` in a Windows console for live status. Esc or Ctrl+C closes the view. Use `--once` for scripts.
+
+Process watch identifiers use lowercase executable names such as `codex.exe`. Working-directory rules accept Windows drive letters, UNC shares, and WSL share paths. Drive letters and normal Windows shares compare case-insensitively, and `/mnt/c/…` is treated as `C:\…`. WSL distro paths preserve directory case. For transcripts stored under a configured `\\wsl.localhost\<distro>\…` root, native Linux paths in those files resolve within that distro.
+
+To build the per-user MSI, install WiX 5 and run `scripts/build-windows-installer.ps1 -Version 0.1.0` on Windows. Release builds require a Windows code-signing certificate and SignTool. Supply `-CertificateThumbprint` to sign the executables and MSI, or use `-Unsigned` for a test build. After installation, open **Enable Antitimely tracking** from the Start menu to register startup under your account.
 
 ## Quick start
 
@@ -87,7 +126,7 @@ atl invoice generate BClouder
 
 ## How it works
 
-A background daemon polls every 5 seconds, stores everything in a single SQLite file (`~/.antitimely/db.sqlite`), and answers the CLI over a Unix socket. All OS introspection is isolated in one package (`internal/osbridge`) and, on macOS, done by shelling out to standard tools — no CGO.
+A background daemon polls every 5 seconds, stores everything in a single SQLite file (`~/.antitimely/db.sqlite`), and answers the CLI over a local socket or named pipe. OS introspection is isolated in `internal/osbridge`.
 
 ### Each poll: three independent signals
 
@@ -95,7 +134,7 @@ On every tick the daemon gathers up to three kinds of **observation**, each a fi
 
 | Signal | How the process / work is identified | Carries |
 |---|---|---|
-| **focus** | The frontmost app, via AppleScript against *System Events* (`osascript`) — its bundle id, name, and focused window title. Collected only while you're at the keyboard. | bundle id + window title (no cwd) |
+| **focus** | The foreground app and window title. macOS uses AppleScript and identifies apps by bundle ID. Windows uses Win32 and identifies apps by executable name. Collected while the user is active. | app ID + window title |
 | **agent** | `ps -A` lists every process with its cumulative CPU time. The daemon diffs each PID's CPU against the previous poll; processes burning sustained CPU (the "busy bar", with rise/fall hysteresis — see [What counts as "active"](#what-counts-as-active)) qualify. For each, the working directory is read with `lsof -p <pid> -d cwd`. | binary name + cwd |
 | **transcript** | Reads coding-agent session logs: tails Claude Code's `~/.claude*/projects/<dir>/*.jsonl` (every config dir, e.g. `~/.claude-work` used via `CLAUDE_CONFIG_DIR`; discovered at daemon start) and Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, and queries opencode's `~/.local/share/opencode/opencode.db` read-only. Takes the `cwd` and last-activity time from the log itself. Needs no CPU, no focus, not even a local process. | cwd + session id |
 
@@ -252,6 +291,48 @@ atl report --from=2026-05-01 --to=2026-05-31
 ```
 
 If you build something on top, exit codes are stable: `0` success, `1` runtime error, `2` daemon unreachable, `64` usage error.
+
+## Optional device sync
+
+The Go sync server exposes Connect RPCs defined in the [versioned protobuf schema](api/antitimely/sync/v1/sync.proto). The daemon can run locally without a server or network access.
+
+```sh
+go build -o antitimely-server ./cmd/antitimely-server
+./antitimely-server create-account -db /var/lib/antitimely/sync.sqlite -name team -out account.token
+./antitimely-server serve -db /var/lib/antitimely/sync.sqlite -listen 127.0.0.1:8080
+./antitimely-server register-device -url https://sync.example.com -account-token-file account.token -name laptop -out device.json
+```
+
+Run the server on loopback behind an HTTPS reverse proxy, or supply `-tls-cert` and `-tls-key` to serve HTTPS directly. Keep the SQLite database in persistent storage and back it up with SQLite's online backup API or a stopped server. Protect the account token and copy only the device credential file to the tracker machine.
+
+Set these keys in the daemon's YAML config and restart it.
+
+```yaml
+sync_endpoint: https://sync.example.com
+sync_token_file: ~/.antitimely/device.json
+```
+
+The daemon queues project names and assigned time intervals recorded after opt-in. Observation details, rules, window titles, and file paths stay local. Upload retries are idempotent. Use `antitimely sync status` to see the queue and the most recent result. Set both keys to empty to pause sync. Each database is bound to its first endpoint and device to prevent sending history to another account.
+
+Account-authenticated RPCs list device projects, link projects across devices to a shared group, and report the union of time intervals by project and across the account. Devices can only upload under their own identity. Projects with the same name remain distinct until explicitly linked.
+
+### ClickUp and the Windows tray
+
+Open **Antitimely tray** from the Windows Start menu. Choose **Start timer** for a standalone session, with an optional name, or choose **Start without a task** from the ClickUp task list. **Stop timer** saves the session to **History** on the device. The CLI offers the same controls through `antitimely timer start ["session name"]`, `antitimely timer stop`, and `antitimely timer status`.
+
+Generate the server-side encryption key once and keep it beside the deployment secrets.
+
+```sh
+./antitimely-server generate-clickup-key -out clickup.key
+./antitimely-server serve -db /var/lib/antitimely/sync.sqlite -clickup-key-file clickup.key
+./antitimely-server clickup-connect -url https://sync.example.com -account-token-file account.token -personal-token-file clickup.token
+```
+
+For OAuth, also pass `-clickup-oauth-file` to the server. The JSON file contains `client_id`, `client_secret`, and `redirect_url`. Register the exact HTTPS `/clickup/oauth/callback` URL with ClickUp. Run `clickup-oauth` with the server URL and account token file, then open the authorization URL it prints. To enable the tray’s **Sign in with ClickUp** button for an enrolled device, include its device ID in the OAuth configuration’s `sign_in_device_ids` array and restart the server. Run `clickup-disconnect` with the same options to remove the stored credential.
+
+When connected, use **Refresh** to update your assigned ClickUp tasks. Select a task's Play button to start tracking it. Standalone sessions and ClickUp tasks share one running timer. The timer measures elapsed wall time through idle, sleep, and daemon restart. Stopping or switching saves the completed interval in SQLite and queues it for submission if it belongs to a ClickUp task. **Assign tracked time** previews the exact duration from an existing date range before you confirm it. Submitted or reserved intervals are excluded from future allocations.
+
+The tray shows queued, published, failed, and unconfirmed entries. Antitimely reconciles an unconfirmed ClickUp creation using its reference marker. It retries the lookup while the entry remains unconfirmed. Closing the panel hides it and leaves the tracker running.
 
 ## Configuration
 

@@ -88,7 +88,7 @@ func TestRPC_InvoiceGenerate_MonthlyFixedHappyPath(t *testing.T) {
 	// Write the sender config file.
 	outDir := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	body := strings.Replace(senderYAMLForRPC, "%s", outDir, 1)
+	body := strings.Replace(senderYAMLForRPC, "%s", filepath.ToSlash(outDir), 1)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRPC_InvoiceGenerate_DryRun(t *testing.T) {
 	}
 	outDir := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	body := strings.Replace(senderYAMLForRPC, "%s", outDir, 1)
+	body := strings.Replace(senderYAMLForRPC, "%s", filepath.ToSlash(outDir), 1)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func seedHourlyCompanyWithTicks(t *testing.T, client *rpc.Client, db *sql.DB, ho
 
 	outDir := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	body := strings.Replace(senderYAMLForRPCHourly, "%s", outDir, 1)
+	body := strings.Replace(senderYAMLForRPCHourly, "%s", filepath.ToSlash(outDir), 1)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

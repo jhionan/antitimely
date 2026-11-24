@@ -10,7 +10,7 @@ DO UPDATE SET first_seen = first_seen
 RETURNING id;
 
 -- name: IsObservationIgnored :one
-SELECT EXISTS(SELECT 1 FROM ignored_observations WHERE observation_id = ?) AS ignored;
+SELECT CAST(EXISTS(SELECT 1 FROM ignored_observations WHERE observation_id = ?) AS INTEGER) AS ignored;
 
 -- name: InsertTick :exec
 INSERT OR IGNORE INTO ticks (ts, observation_id, project_id) VALUES (?, ?, ?);
@@ -124,12 +124,8 @@ WHERE project_id IS NULL
         AND (? IS NULL OR window_title LIKE '%' || ? || '%')
         AND (? IS NULL OR binary_name = ?)
         AND (? IS NULL OR space_id = ?)
-        AND (? IS NULL OR CASE WHEN rtrim(?, '/') = ''
-                               THEN 0
-                               WHEN instr(?, '*') > 0
-                                    THEN (cwd GLOB rtrim(?, '/') OR cwd GLOB rtrim(?, '/') || '/*')
-                               ELSE (cwd = rtrim(?, '/') OR substr(cwd, 1, length(rtrim(?, '/')) + 1) = rtrim(?, '/') || '/')
-                          END)
+        AND (CAST(sqlc.narg(cwd_pattern) AS TEXT) IS NULL OR
+             antitimely_cwd_matches(CAST(sqlc.narg(cwd_pattern) AS TEXT), cwd) = 1)
   );
 
 -- name: RetagSingleObservation :exec

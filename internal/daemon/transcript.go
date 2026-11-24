@@ -169,6 +169,7 @@ func (p *Pipeline) collectClaudeRoot(ctx context.Context, snap *CacheSnapshot, n
 			// every transcript signal — no log line, just missing time.
 			sessionID := e.Name()[:len(e.Name())-len(".jsonl")]
 			spaceID := p.transcriptSpace(ctx, sessionID, root.Sessions, &pids)
+			cwd = domain.TranscriptCwd(cwd, path)
 			if !cwdMatchesAnyPattern(cwd, snap.CwdPatterns) && !(spaceID != "" && snap.BoundSpaceIDs[spaceID]) {
 				continue
 			}

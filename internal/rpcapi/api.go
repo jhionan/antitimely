@@ -366,3 +366,12 @@ type SetCompanyBillingReply struct{}
 
 type TranscriptImportArgs struct{ FromUnix, ToUnix int64 }
 type TranscriptImportReply struct{ Inserted int }
+
+type SyncStatusArgs struct{}
+
+type SyncStatusReply struct {
+	Configured      bool
+	Pending         int64
+	LastSuccessUnix int64
+	Error           string
+}

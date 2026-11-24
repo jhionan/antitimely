@@ -3,9 +3,12 @@ module github.com/rian/antitimely
 go 1.26.1
 
 require (
+	connectrpc.com/connect v1.20.0
+	github.com/Microsoft/go-winio v0.6.4
 	github.com/johnfercher/maroto/v2 v2.4.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.49.0
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.50.1
 )
@@ -34,4 +37,9 @@ require (
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+)
+
+tool (
+	connectrpc.com/connect/cmd/protoc-gen-connect-go
+	google.golang.org/protobuf/cmd/protoc-gen-go
 )

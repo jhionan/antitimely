@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+package antitimely.sync.v1;
+
+option go_package = "github.com/rian/antitimely/internal/syncapi/v1;syncv1";
+
+service SyncService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+  rpc RevokeDevice(RevokeDeviceRequest) returns (RevokeDeviceResponse);
+  rpc Push(PushRequest) returns (PushResponse);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+  rpc LinkProject(LinkProjectRequest) returns (LinkProjectResponse);
+  rpc Totals(TotalsRequest) returns (TotalsResponse);
+}
+
+message HealthRequest {}
+message HealthResponse {}
+message RegisterDeviceRequest { string name = 1; }
+message RegisterDeviceResponse {
+  string device_id = 1;
+  string token = 2;
+}
+message RevokeDeviceRequest { string device_id = 1; }
+message RevokeDeviceResponse {}
+
+message PushRequest {
+  repeated Record records = 1;
+  string device_id = 2;
+}
+message PushResponse {}
+message Record {
+  string id = 1;
+  // Monotonically increasing within the source device, even across restarts.
+  int64 revision = 2;
+  oneof value {
+    Project project = 3;
+    TimeSlice time_slice = 4;
+    Tombstone tombstone = 5;
+  }
+}
+message Project { string name = 1; }
+message TimeSlice {
+  string project_id = 1;
+  int64 start_unix = 2;
+  int32 duration_seconds = 3;
+}
+message Tombstone {}
+
+message ListProjectsRequest {}
+message ListProjectsResponse { repeated ProjectRef projects = 1; }
+message ProjectRef {
+  string device_id = 1;
+  string project_id = 2;
+  string name = 3;
+  string group_id = 4;
+}
+message LinkProjectRequest {
+  string device_id = 1;
+  string project_id = 2;
+  // An account-scoped label. An empty value removes the link.
+  string group_id = 3;
+}
+message LinkProjectResponse {}
+
+message TotalsRequest {
+  int64 start_unix = 1;
+  int64 end_unix = 2;
+}
+message TotalsResponse {
+  int64 total_seconds = 1;
+  repeated ProjectTotal projects = 2;
+}
+message ProjectTotal {
+  string key = 1;
+  int64 seconds = 2;
+}
+
+// Account credentials manage the connection, and device credentials read tasks.
+service ClickUpService {
+  rpc BeginOAuth(BeginClickUpOAuthRequest) returns (BeginClickUpOAuthResponse);
+  rpc ConnectPersonal(ConnectPersonalRequest) returns (ClickUpConnection);
+  rpc Disconnect(DisconnectClickUpRequest) returns (DisconnectClickUpResponse);
+  rpc Connection(ClickUpConnectionRequest) returns (ClickUpConnection);
+  rpc ListWorkspaces(ListClickUpWorkspacesRequest) returns (ListClickUpWorkspacesResponse);
+  rpc ListTasks(ListClickUpTasksRequest) returns (ListClickUpTasksResponse);
+  rpc TaskDetails(ClickUpTaskDetailsRequest) returns (ClickUpTaskDetailsResponse);
+  rpc SubmitTime(SubmitClickUpTimeRequest) returns (ClickUpSubmission);
+}
+
+message BeginClickUpOAuthRequest {}
+message BeginClickUpOAuthResponse { string authorization_url = 1; }
+message ConnectPersonalRequest { string token = 1; }
+message DisconnectClickUpRequest {}
+message DisconnectClickUpResponse {}
+message ClickUpConnectionRequest {}
+message ClickUpConnection {
+  bool connected = 1;
+  string connection_id = 2;
+  string username = 3;
+}
+message ListClickUpWorkspacesRequest {}
+message ListClickUpWorkspacesResponse { repeated ClickUpWorkspace workspaces = 1; }
+message ClickUpWorkspace {
+  string id = 1;
+  string name = 2;
+}
+message ListClickUpTasksRequest {
+  string workspace_id = 1;
+  int32 page = 2;
+}
+message ListClickUpTasksResponse {
+  repeated ClickUpTask tasks = 1;
+  bool last_page = 2;
+}
+message ClickUpTask {
+  string id = 1;
+  string name = 2;
+  string url = 3;
+  string parent_id = 4;
+}
+
+message SubmitClickUpTimeRequest {
+  string id = 1;
+  string connection_id = 2;
+  string workspace_id = 3;
+  string task_id = 4;
+  int64 start_unix = 5;
+  int64 end_unix = 6;
+}
+
+message ClickUpSubmission {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    STATE_QUEUED = 1;
+    STATE_PUBLISHED = 2;
+    STATE_NEEDS_REVIEW = 3;
+    STATE_FAILED = 4;
+  }
+  State state = 1;
+  string provider_entry_id = 2;
+  string message = 3;
+  int64 retry_after_unix = 4;
+}
+
+message ClickUpTaskDetailsRequest { string task_id = 1; }
+message ClickUpTaskDetailsResponse {
+  string name = 1;
+  string description = 2;
+  string status = 3;
+  string priority = 4;
+  int64 due_unix_millis = 5;
+  string url = 6;
+  repeated ClickUpAttachment attachments = 7;
+  repeated ClickUpComment comments = 8;
+}
+message ClickUpAttachment {
+  string name = 1;
+  string url = 2;
+  bool image = 3;
+}
+message ClickUpComment {
+  string author = 1;
+  string text = 2;
+}

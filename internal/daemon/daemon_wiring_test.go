@@ -49,8 +49,9 @@ func TestDaemonPipelineUsesRealHerdrSessionPath(t *testing.T) {
 // dropping this derivation would quietly send every headless review back to
 // cwd-only attribution with the transcript tests still green.
 func TestPipelineConfigDerivesClaudeSessionsDir(t *testing.T) {
-	got := pipelineConfigFor(Config{TranscriptRoots: []string{"/u/.claude/projects"}}).ClaudeRoots
-	if len(got) != 1 || got[0].Sessions != "/u/.claude/sessions" {
+	root := filepath.Join(t.TempDir(), ".claude")
+	got := pipelineConfigFor(Config{TranscriptRoots: []string{filepath.Join(root, "projects")}}).ClaudeRoots
+	if len(got) != 1 || got[0].Sessions != filepath.Join(root, "sessions") {
 		t.Fatalf("ClaudeRoots = %+v, want the sessions registry beside the transcript root", got)
 	}
 	if got := pipelineConfigFor(Config{}).ClaudeRoots; len(got) != 0 {

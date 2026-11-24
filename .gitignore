@@ -5,6 +5,7 @@
 /antitimely
 /antitimelyd
 *.exe
+/dist/
 
 # Local state
 *.sqlite

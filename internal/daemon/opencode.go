@@ -83,6 +83,7 @@ func (p *Pipeline) collectOpencodeSignals(ctx context.Context, snap *CacheSnapsh
 			p.opencodeFailed(now, err)
 			return nil
 		}
+		dir = domain.TranscriptCwd(dir, p.cfg.OpencodeDB)
 		if !cwdMatchesAnyPattern(dir, snap.CwdPatterns) {
 			continue
 		}
@@ -117,11 +118,10 @@ func (p *Pipeline) opencodeHandle() (*sql.DB, error) {
 	if p.opencodeDB != nil {
 		return p.opencodeDB, nil
 	}
-	dsn := (&url.URL{
-		Scheme:   "file",
-		Path:     p.cfg.OpencodeDB,
-		RawQuery: "mode=ro&_pragma=busy_timeout(250)",
-	}).String()
+	// Encode the filename separately so a Windows drive letter is part of
+	// the path. url.URL.String would make it the URI authority.
+	path := url.URL{Path: filepath.ToSlash(p.cfg.OpencodeDB)}
+	dsn := "file:" + path.EscapedPath() + "?mode=ro&_pragma=busy_timeout(250)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,8 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestProposeRule_AgentWithProjectInPath(t *testing.T) {
 	obs := Observation{

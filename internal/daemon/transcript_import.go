@@ -61,6 +61,7 @@ func importTranscriptRoot(db *sql.DB, q *store.Queries, snap *CacheSnapshot, roo
 			if len(stamps) == 0 {
 				continue
 			}
+			cwd = domain.TranscriptCwd(cwd, sessDir)
 			pid := domain.MatchRules(domain.Signal{Source: domain.SourceTranscript, Cwd: cwd}, snap.Rules)
 			if pid == nil {
 				continue

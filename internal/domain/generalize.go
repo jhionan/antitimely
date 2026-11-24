@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -36,23 +36,34 @@ func ProposeRule(obs Observation, projectName string) ProposedRule {
 // returning it with a trailing slash. If projectName isn't in cwd, returns
 // cwd's parent directory (with trailing slash).
 func generalizeCwd(cwd, projectName string) string {
-	cleanCwd := filepath.Clean(cwd)
-	parts := strings.Split(cleanCwd, string(filepath.Separator))
+	cleanCwd, isWindows := windowsCwd(cwd)
+	root := ""
+	if isWindows {
+		if strings.HasPrefix(cleanCwd, "//") {
+			parts := strings.SplitN(cleanCwd[2:], "/", 3)
+			root = "//" + parts[0] + "/" + parts[1]
+			cleanCwd = strings.TrimPrefix(cleanCwd, root)
+		} else {
+			root, cleanCwd = cleanCwd[:2], cleanCwd[2:]
+		}
+	} else {
+		cleanCwd = path.Clean(cwd)
+	}
+	parts := strings.Split(cleanCwd, "/")
 
 	for i := len(parts) - 1; i >= 0; i-- {
 		// Case-insensitive match so e.g. project "Antitimely" finds dir "antitimely".
 		if strings.EqualFold(parts[i], projectName) {
-			prefix := strings.Join(parts[:i+1], string(filepath.Separator))
-			return prefix + string(filepath.Separator)
+			prefix := strings.Join(parts[:i+1], "/")
+			return root + prefix + "/"
 		}
 	}
 
 	// Fallback: parent directory.
-	parent := filepath.Dir(cleanCwd)
-	if !strings.HasSuffix(parent, string(filepath.Separator)) {
-		parent += string(filepath.Separator)
+	if cleanCwd == "" {
+		return root + "/"
 	}
-	return parent
+	return root + strings.TrimRight(path.Dir(cleanCwd), "/") + "/"
 }
 
 // generalizeTitle returns projectName if it appears as a substring of title

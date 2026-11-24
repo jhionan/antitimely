@@ -256,3 +256,16 @@ func TestCollectCodex_RootKnownFromEarlierRead(t *testing.T) {
 		t.Fatalf("got %+v, want one signal still at /work/daas", sigs)
 	}
 }
+
+func TestDecodeWindowsFileURLs(t *testing.T) {
+	for raw, want := range map[string]string{
+		"file:///C:/Work/Agent%20App":               "C:/Work/Agent App",
+		"file://NAS/Share/Agent%20App":              "//NAS/Share/Agent App",
+		"file://wsl.localhost/Ubuntu/home/Rian/app": "//wsl.localhost/Ubuntu/home/Rian/app",
+		"file:///Users/rian/repo":                   "/Users/rian/repo",
+	} {
+		if got := decodeFileURL(raw); got != want {
+			t.Errorf("decodeFileURL(%q) = %q; want %q", raw, got, want)
+		}
+	}
+}

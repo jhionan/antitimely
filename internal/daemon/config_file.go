@@ -15,6 +15,8 @@ import (
 // FileConfig is the YAML config file shape. All fields are optional; empty/zero
 // means "use whatever was already in Config".
 type FileConfig struct {
+	SyncEndpoint          string   `yaml:"sync_endpoint,omitempty"`
+	SyncTokenFile         string   `yaml:"sync_token_file,omitempty"`
 	Interval              string   `yaml:"interval,omitempty"`
 	IdleThreshold         string   `yaml:"idle_threshold,omitempty"`
 	AgentCPUThreshold     uint64   `yaml:"agent_cpu_threshold,omitempty"`
@@ -66,6 +68,14 @@ func LoadFileConfig(path string) (FileConfig, error) {
 // ApplyTo merges non-empty values from fc into cfg in place. Returns an error
 // if a duration field can't be parsed or a ~-prefixed path can't be expanded.
 func (fc FileConfig) ApplyTo(cfg *Config) error {
+	if fc.SyncEndpoint != "" || fc.SyncTokenFile != "" {
+		filename, err := expandHome(fc.SyncTokenFile)
+		if err != nil {
+			return fmt.Errorf("sync_token_file: %w", err)
+		}
+		cfg.Sync.Endpoint, cfg.Sync.TokenFile = fc.SyncEndpoint, filename
+	}
+
 	if fc.Interval != "" {
 		d, err := time.ParseDuration(fc.Interval)
 		if err != nil {
@@ -268,6 +278,10 @@ agent_busy_fall_ticks: 3
 # socket_path: ~/.antitimely/antitimely.sock
 # db_path:     ~/.antitimely/db.sqlite
 # pid_path:    ~/.antitimely/antitimely.pid
+
+# Opt in to remote project and time sync by setting both fields.
+# sync_endpoint: https://sync.example.com
+# sync_token_file: ~/.antitimely/device.json
 
 # Count Claude Code work (incl. remote-driven and planning sessions) by watching
 # session transcripts. Captures work that produces no local CPU/focus. Transcript

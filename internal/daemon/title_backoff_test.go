@@ -8,6 +8,23 @@ import (
 	"github.com/rian/antitimely/internal/osbridge"
 )
 
+func TestPipeline_SkipsFocusSampleAfterForegroundChanges(t *testing.T) {
+	p, br, cache, db := newTestPipeline(t)
+	defer db.Close()
+	cache.Store(&CacheSnapshot{AllowedBundles: map[string]bool{"editor.exe": true}})
+	br.FrontmostInfoVal = osbridge.FrontmostInfo{BundleID: "editor.exe", PID: 1}
+	br.FocusedTitleErr = osbridge.ErrForegroundChanged
+
+	if _, ok := p.collectFocusSignal(context.Background(), cache.Snapshot(), 1000); ok {
+		t.Fatal("recorded a focus sample spanning a foreground change")
+	}
+	br.FocusedTitleErr = nil
+	br.FocusedTitle = "Project"
+	if sig, ok := p.collectFocusSignal(context.Background(), cache.Snapshot(), 1005); !ok || sig.WindowTitle != "Project" {
+		t.Fatalf("next foreground sample was not captured: %+v", sig)
+	}
+}
+
 // When window-title capture is denied, the daemon must stop spawning the title
 // osascript every tick (the process-leak vector) and only re-probe periodically.
 func TestPipeline_TitleDenied_BacksOffOsascript(t *testing.T) {

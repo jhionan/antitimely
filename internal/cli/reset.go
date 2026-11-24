@@ -4,12 +4,11 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/rian/antitimely/internal/daemon"
+	"github.com/rian/antitimely/internal/localrpc"
 )
 
 func cmdReset(args []string) int {
@@ -35,7 +34,7 @@ func cmdReset(args []string) int {
 		return 64
 	}
 
-	cfg, err := daemon.DefaultConfig()
+	cfg, err := configuredDaemon()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -44,8 +43,7 @@ func cmdReset(args []string) int {
 	// Refuse if daemon is alive. A stale socket file (no listener) is fine.
 	if daemonAlive(cfg.SocketPath) {
 		fmt.Fprintln(os.Stderr, "The daemon is currently running. Stop it first:")
-		fmt.Fprintln(os.Stderr, "  antitimely uninstall-launch-agent     # if managed by launchd")
-		fmt.Fprintf(os.Stderr, "  kill -TERM $(cat %s)  # if running standalone\n", cfg.PIDPath)
+		printStopDaemonHint(os.Stderr, cfg.PIDPath)
 		fmt.Fprintln(os.Stderr, "Then re-run `antitimely reset`.")
 		return 1
 	}
@@ -88,10 +86,7 @@ func cmdReset(args []string) int {
 // daemonAlive reports whether something is actually listening on the socket
 // (vs. just a stale socket file).
 func daemonAlive(socketPath string) bool {
-	if _, err := os.Stat(socketPath); err != nil {
-		return false
-	}
-	conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
+	conn, err := localrpc.Dial(socketPath)
 	if err != nil {
 		return false
 	}

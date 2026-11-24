@@ -13,10 +13,16 @@ import (
 	"github.com/rian/antitimely/internal/osbridge"
 	"github.com/rian/antitimely/internal/rpcapi"
 	"github.com/rian/antitimely/internal/store"
+	"github.com/rian/antitimely/internal/syncclient"
+	"github.com/rian/antitimely/internal/tasktimer"
 )
 
 // AntitimelyService exposes all daemon operations over net/rpc.
 type AntitimelyService struct {
+	Tasks               *tasktimer.Store
+	ClickUp             *tasktimer.Remote
+	SyncWorker          *syncclient.Worker
+	SyncError           error
 	DB                  *sql.DB
 	Q                   *store.Queries
 	Cache               *Cache
@@ -86,6 +92,24 @@ func (s *AntitimelyService) LatestTick(args rpcapi.LatestTickArgs, reply *rpcapi
 		reply.PermissionState = "unknown"
 	}
 	return nil
+}
+
+// SyncStatus reports optional remote sync without requiring network access.
+func (s *AntitimelyService) SyncStatus(_ rpcapi.SyncStatusArgs, reply *rpcapi.SyncStatusReply) error {
+	if s.SyncError != nil {
+		reply.Error = s.SyncError.Error()
+	}
+	if s.SyncWorker == nil {
+		return nil
+	}
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	status, err := s.SyncWorker.Status(ctx)
+	*reply = rpcapi.SyncStatusReply{
+		Configured: status.Configured, Pending: status.Pending,
+		LastSuccessUnix: status.LastSuccessUnix, Error: status.Error,
+	}
+	return err
 }
 
 // Status returns a live snapshot of daemon state.
@@ -636,6 +660,12 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return nil
 	}
 
+	if args.Rule.MatchCWDPrefix != "" {
+		if err := domain.ValidateCwdPattern(args.Rule.MatchCWDPrefix); err != nil {
+			return err
+		}
+	}
+
 	// Read the observation being tagged before opening the transaction: its
 	// space_id scopes the retroactive sweep below.
 	obs, err := s.Q.GetObservation(ctx, args.ObservationID)
@@ -668,25 +698,6 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		return err
 	}
 
-	// Build params for ApplyRuleRetroactivelyCounted. sqlc generated
-	// Column2/Column4/Column6/Column8/Column10 as the IS NULL sentinels
-	// because the query uses bare "?" placeholders for the null checks;
-	// pass the NullString itself for those (nil when not valid) and the
-	// plain string for the equality/matching operand.
-	//
-	// The cwd clause's CASE has four arms sharing the same raw pattern —
-	// "is it empty after rtrim" (RTRIM), "does it contain a glob" (INSTR),
-	// the glob match (RTRIM_2, RTRIM_3), and the byte-exact literal-prefix
-	// match (RTRIM_4, RTRIM_5, RTRIM_6) — so sqlc emits seven fields for
-	// what is conceptually one value. EVERY ONE of RTRIM/INSTR/RTRIM_2..6
-	// must be fed args.Rule.MatchCWDPrefix, unmodified: the SQL does its
-	// own rtrim, so passing anything else here (or skipping one) would
-	// silently desync the glob-detect from the match itself. If this
-	// clause's placeholder count ever changes again, recompute the
-	// mapping placeholder-by-placeholder from queries.sql, don't guess
-	// from the diff — see task-7-report.md fix round 2 for the mapping
-	// table this was derived from.
-	//
 	// The space sentinel is the tagged OBSERVATION's space, not anything the
 	// client sent: observations fork by space, so two visually identical
 	// review rows can exist for the same cwd in different spaces, and a
@@ -699,7 +710,6 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 	titleNull := nullStr(args.Rule.MatchTitleSubstr)
 	binaryNull := nullStr(args.Rule.MatchBinaryName)
 	spaceNull := nullStr(obs.SpaceID)
-	cwdNull := nullStr(args.Rule.MatchCWDPrefix)
 
 	var bundleCol2 interface{}
 	if bundleNull.Valid {
@@ -717,11 +727,6 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 	if spaceNull.Valid {
 		spaceCol8 = spaceNull.String
 	}
-	var cwdCol10 interface{}
-	if cwdNull.Valid {
-		cwdCol10 = cwdNull.String
-	}
-
 	count, err := qtx.ApplyRuleRetroactivelyCounted(ctx, store.ApplyRuleRetroactivelyCountedParams{
 		ProjectID:  sql.NullInt64{Int64: proj.ID, Valid: true},
 		Column2:    bundleCol2,
@@ -732,14 +737,7 @@ func (s *AntitimelyService) TagSignature(args rpcapi.TagSignatureArgs, reply *rp
 		BinaryName: args.Rule.MatchBinaryName,
 		Column8:    spaceCol8,
 		SpaceID:    spaceNull.String,
-		Column10:   cwdCol10,
-		RTRIM:      args.Rule.MatchCWDPrefix,
-		INSTR:      args.Rule.MatchCWDPrefix,
-		RTRIM_2:    args.Rule.MatchCWDPrefix,
-		RTRIM_3:    args.Rule.MatchCWDPrefix,
-		RTRIM_4:    args.Rule.MatchCWDPrefix,
-		RTRIM_5:    args.Rule.MatchCWDPrefix,
-		RTRIM_6:    args.Rule.MatchCWDPrefix,
+		CwdPattern: nullStr(args.Rule.MatchCWDPrefix),
 	})
 	if err != nil {
 		return err
